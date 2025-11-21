@@ -1,0 +1,7 @@
+{
+  "name": "AreaVue Pro",
+  "description": "A professional-grade land surveying and field staking application with AI assistance.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
