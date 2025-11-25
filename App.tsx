@@ -960,17 +960,108 @@ const App: React.FC = () => {
       </div>
       {showAIAssistant && <ChatAssistant survey={currentSurvey} onClose={() => setShowAIAssistant(false)} />}
       {showHelpModal && (
-          <Modal title="AreaVue Pro Help" onClose={() => setShowHelpModal(false)}>
-              <div className="space-y-4 text-slate-300 text-sm">
-                  <div><h3 className="font-bold text-blue-400 text-base mb-1">Getting Started</h3><p>AreaVue allows you to measure land and layout fields using high-accuracy GPS averaging.</p></div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="bg-slate-800 p-3 rounded border border-slate-700"><h4 className="font-bold text-white mb-1"><i className="fas fa-map-marker-alt text-blue-500 mr-2"/>Adding Points</h4><p>Tap the big blue button to add a GPS point. It will average your position for 20s to ensure accuracy.</p></div>
-                      <div className="bg-slate-800 p-3 rounded border border-slate-700"><h4 className="font-bold text-white mb-1"><i className="fas fa-hand-pointer text-pink-500 mr-2"/>Manual Mode</h4><p>Enable Manual Mode (Hand icon) to tap anywhere on the map to place points remotely.</p></div>
-                      <div className="bg-slate-800 p-3 rounded border border-slate-700"><h4 className="font-bold text-white mb-1"><i className="fas fa-ruler-combined text-amber-500 mr-2"/>Staking Mode</h4><p>Plan a field layout. The app calculates distance and bearing between points and helps you stay in a straight line.</p></div>
-                      <div className="bg-slate-800 p-3 rounded border border-slate-700"><h4 className="font-bold text-white mb-1"><i className="fas fa-compass text-blue-400 mr-2"/>Navigation</h4><p>Tap any point to select it, then click "Navigate" to see real-time distance and bearing to that point.</p></div>
-                  </div>
-                  <div><h3 className="font-bold text-blue-400 text-base mb-1">Exporting</h3><p>Open the menu (top right) to export your survey data to CSV, KML (Google Earth), JSON, or PDF reports.</p></div>
-                  <div className="text-xs text-slate-500 border-t border-slate-700 pt-2"><p>Disclaimer: This tool is for planning purposes only. Not a replacement for legal land surveys.</p></div>
+          <Modal title="AreaVue — Comprehensive Help Guide" onClose={() => setShowHelpModal(false)}>
+              <div className="space-y-6 text-slate-300 text-sm leading-relaxed">
+                {/* Legal Notice */}
+                <div className="bg-amber-900/20 border-l-4 border-amber-500 p-4 rounded-r-lg">
+                  <h3 className="font-bold text-amber-500 text-lg mb-2">⚠️ Important Legal Notice</h3>
+                  <p className="mb-2">
+                    AreaVue provides approximate location and distance estimates using consumer-grade GPS and public map data. 
+                    It is intended <em className="text-white">only for planning, educational, agricultural layout, or recreational use</em>.
+                  </p>
+                  <ul className="list-none space-y-1 text-amber-200/80">
+                    <li>❌ <strong>Do NOT</strong> use AreaVue to determine property boundaries or resolve land disputes.</li>
+                    <li>❌ <strong>Do NOT</strong> use this app to replace measurements by a qualified land surveyor or geospatial professional.</li>
+                    <li>❌ <strong>Do NOT</strong> rely on AreaVue for legal, regulatory, engineering, or construction decisions.</li>
+                  </ul>
+                  <p className="mt-2 text-xs opacity-80">For any official or legally binding purpose, always consult a qualified professional in your country.</p>
+                </div>
+
+                {/* Quick Start */}
+                <div>
+                  <h3 className="font-bold text-blue-400 text-base mb-2 flex items-center gap-2"><i className="fas fa-rocket"></i> Quick Start Workflow</h3>
+                  <ol className="list-decimal list-inside space-y-2 ml-2">
+                    <li><strong className="text-white">GPS Point Collection:</strong> Tap the "📍 GPS Point" button to collect high-accuracy GNSS positions. The system averages readings over 20 seconds.</li>
+                    <li><strong className="text-white">Manual Point Placement:</strong> Use "🟢 Manual Point" to place markers by tapping the map. Zoom in for precise placement.</li>
+                    <li><strong className="text-white">Field Staking:</strong> Use "📐 Staking" to create precise field layouts by walking in straight lines.</li>
+                    <li><strong className="text-white">Location Services:</strong> Press "🎯 My Location" to center the map on your current position.</li>
+                    <li><strong className="text-white">Area Calculation:</strong> Once you have 3+ points, area and perimeter are calculated automatically.</li>
+                    <li><strong className="text-white">Data Management:</strong> Use the "⚙️ Controls" panel to save, export, and manage your surveys.</li>
+                  </ol>
+                </div>
+
+                {/* Staking */}
+                <div>
+                  <h3 className="font-bold text-amber-500 text-base mb-2 flex items-center gap-2"><i className="fas fa-ruler-combined"></i> Field Staking Module</h3>
+                  <ul className="list-disc list-inside space-y-1 ml-2 marker:text-amber-500">
+                    <li><strong className="text-white">Starting a Field:</strong> Click "Staking" button. The control panel appears.</li>
+                    <li><strong className="text-white">Setting Initial Bearing:</strong> Add your first point, then walk to a second point to establish bearing.</li>
+                    <li><strong className="text-white">Adding Collinear Points:</strong> Walk along the established line. The system checks for collinearity.</li>
+                    <li><strong className="text-white">Making Turns:</strong> Use "Left" or "Right" turn buttons (default 90°) to change direction.</li>
+                    <li><strong className="text-white">Corner Points:</strong> Mark corners where you've made turns.</li>
+                    <li><strong className="text-white">Completing:</strong> Click "Complete Field" (or save survey) when done.</li>
+                  </ul>
+                </div>
+
+                {/* Accuracy */}
+                <div>
+                  <h3 className="font-bold text-green-400 text-base mb-2 flex items-center gap-2"><i className="fas fa-crosshairs"></i> Accuracy & Best Practices</h3>
+                  <ul className="list-disc list-inside space-y-1 ml-2 marker:text-green-400">
+                    <li><strong className="text-white">GPS Conditions:</strong> Work in open sky conditions away from tall buildings or trees.</li>
+                    <li><strong className="text-white">Device Positioning:</strong> Hold your device steady during collection.</li>
+                    <li><strong className="text-white">Point Spacing:</strong> Maintain at least 5 meters between consecutive points.</li>
+                    <li><strong className="text-white">Calibration:</strong> Allow GPS to stabilize for 30-60 seconds before starting.</li>
+                  </ul>
+                </div>
+
+                {/* Map Controls */}
+                <div>
+                  <h3 className="font-bold text-indigo-400 text-base mb-2 flex items-center gap-2"><i className="fas fa-map"></i> Map Navigation & Controls</h3>
+                  <ul className="list-disc list-inside space-y-1 ml-2 marker:text-indigo-400">
+                    <li><strong className="text-white">Zoom Controls:</strong> Use pinch gestures or mouse wheel. The app supports deep digital zooming.</li>
+                    <li><strong className="text-white">Scale Bar:</strong> Adjusts automatically based on zoom level.</li>
+                    <li><strong className="text-white">Compass:</strong> The map compass updates in real-time using device sensors.</li>
+                    <li><strong className="text-white">Drag & Drop:</strong> Manually placed points can be dragged to fine-tune positions.</li>
+                  </ul>
+                </div>
+
+                {/* Data Export */}
+                <div>
+                  <h3 className="font-bold text-purple-400 text-base mb-2 flex items-center gap-2"><i className="fas fa-file-export"></i> Data Export & Sharing</h3>
+                  <ul className="list-disc list-inside space-y-1 ml-2 marker:text-purple-400">
+                    <li><strong className="text-white">PDF Reports:</strong> Professional reports with maps, coordinates, and metadata.</li>
+                    <li><strong className="text-white">KML Files:</strong> Export to Google Earth format for 3D visualization.</li>
+                    <li><strong className="text-white">CSV Data:</strong> Raw coordinate data with UTM projections for CAD/GIS.</li>
+                    <li><strong className="text-white">Survey Management:</strong> Save multiple surveys with timestamps.</li>
+                  </ul>
+                </div>
+
+                {/* Advanced */}
+                <div>
+                  <h3 className="font-bold text-pink-400 text-base mb-2 flex items-center gap-2"><i className="fas fa-cogs"></i> Advanced Features</h3>
+                  <ul className="list-disc list-inside space-y-1 ml-2 marker:text-pink-400">
+                    <li><strong className="text-white">UTM Coordinates:</strong> Automatic conversion to UTM zones.</li>
+                    <li><strong className="text-white">Bearing Calculations:</strong> Precise bearings in Degrees Minutes format.</li>
+                    <li><strong className="text-white">Elevation Data:</strong> GPS elevation recording (when available).</li>
+                    <li><strong className="text-white">Real-time Distance:</strong> Live distance/bearing tracking during navigation.</li>
+                  </ul>
+                </div>
+
+                {/* Troubleshooting */}
+                <div>
+                  <h3 className="font-bold text-red-400 text-base mb-2 flex items-center gap-2"><i className="fas fa-tools"></i> Troubleshooting</h3>
+                  <ul className="list-disc list-inside space-y-1 ml-2 marker:text-red-400">
+                    <li><strong className="text-white">GPS Issues:</strong> Check location permissions. Ensure high-accuracy mode is on.</li>
+                    <li><strong className="text-white">Map Loading:</strong> Requires active internet connection for tiles.</li>
+                    <li><strong className="text-white">Accuracy:</strong> Poor accuracy (>30m) indicates obstructed sky view.</li>
+                  </ul>
+                </div>
+
+                {/* Privacy */}
+                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 mt-4">
+                    <h3 className="font-bold text-white mb-1 flex items-center gap-2"><i className="fas fa-lock text-emerald-500"></i> Privacy & Data</h3>
+                    <p>All survey data is stored locally on your device. No location data is transmitted to external servers. Export your data regularly to prevent loss.</p>
+                </div>
               </div>
           </Modal>
       )}
