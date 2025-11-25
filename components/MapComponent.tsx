@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents, Circle } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents, Circle, Tooltip, CircleMarker } from 'react-leaflet';
 import { GeoPoint, PointType, PointLabelMode } from '../types';
 
 // --- CRITICAL FIX FOR PDF EXPORT ---
@@ -20,7 +20,15 @@ const DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon;
 
 // Custom Icon Generators
-const createDivIconHtml = (color1: string, color2: string, innerText: string, size: number, isSmall: boolean, labelText: string | null) => `
+const createDivIconHtml = (
+  color1: string, 
+  color2: string, 
+  innerText: string, 
+  size: number, 
+  isSmall: boolean, 
+  labelText: string | null,
+  turnDirection?: 'Left' | 'Right'
+) => `
   <div class="relative">
     <div class="marker-pin transition-transform duration-300" style="
       background: linear-gradient(135deg, ${color1}, ${color2});
@@ -40,6 +48,31 @@ const createDivIconHtml = (color1: string, color2: string, innerText: string, si
         font-size: ${isSmall ? '10px' : '12px'};
       ">${innerText}</span>
     </div>
+    
+    ${/* Turn Direction Indicator */ ''}
+    ${turnDirection ? `
+      <div style="
+        position: absolute;
+        top: -6px;
+        ${turnDirection === 'Left' ? 'left: -8px;' : 'right: -8px;'}
+        background-color: ${turnDirection === 'Left' ? '#8b5cf6' : '#10b981'}; /* Violet for Left, Emerald for Right */
+        color: white;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px solid white;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        font-size: 10px;
+        z-index: 50;
+      ">
+        <i class="fas fa-${turnDirection === 'Left' ? 'arrow-left' : 'arrow-right'}" style="transform: rotate(${turnDirection === 'Left' ? '-45deg' : '45deg'});"></i>
+      </div>
+    ` : ''}
+
+    ${/* Text Label */ ''}
     ${labelText ? `
       <div style="
         position: absolute;
@@ -100,7 +133,7 @@ const getIcon = (point: GeoPoint, index: number, isExporting: boolean, labelMode
       html = createDivIconHtml('#ec4899', '#be185d', innerText, size, isExporting, labelText);
       break;
     case PointType.STAKING:
-      html = createDivIconHtml('#f59e0b', '#b45309', innerText, size, isExporting, labelText);
+      html = createDivIconHtml('#f59e0b', '#b45309', innerText, size, isExporting, labelText, point.turnDirection);
       break;
     case PointType.INTERMEDIATE:
       html = createDivIconHtml('#06b6d4', '#0e7490', innerText, size * 0.8, isExporting, labelText);
@@ -190,6 +223,7 @@ interface MapComponentProps {
   onPointClick: (id: string) => void;
   baseline?: { start: GeoPoint, end: GeoPoint } | null;
   pointLabelMode: PointLabelMode;
+  navigationTarget: GeoPoint | null;
 }
 
 export const MapComponent: React.FC<MapComponentProps> = ({
@@ -205,10 +239,36 @@ export const MapComponent: React.FC<MapComponentProps> = ({
   onMapClick,
   onPointClick,
   baseline,
-  pointLabelMode
+  pointLabelMode,
+  navigationTarget
 }) => {
   // Cache-busting for CORS tiles (crucial for export)
   const [tileUrl] = useState(`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?t=${Date.now()}`);
+
+  // Compass State
+  const [heading, setHeading] = useState(0);
+
+  useEffect(() => {
+    const handleOrientation = (e: DeviceOrientationEvent) => {
+      let compass = 0;
+      const evt = e as any;
+      if (evt.webkitCompassHeading) {
+        // iOS
+        compass = evt.webkitCompassHeading;
+      } else if (e.alpha !== null) {
+        // Android / Standard (Approximate if absolute is not available)
+        compass = Math.abs(e.alpha - 360);
+      }
+      setHeading(compass);
+    };
+    
+    if (window.DeviceOrientationEvent) {
+      window.addEventListener("deviceorientation", handleOrientation, true);
+    }
+    return () => {
+      window.removeEventListener("deviceorientation", handleOrientation, true);
+    };
+  }, []);
 
   return (
     <div id="map-container" className="h-full w-full relative bg-slate-900">
@@ -267,10 +327,76 @@ export const MapComponent: React.FC<MapComponentProps> = ({
              pathOptions={{ color: '#ec4899', weight: 2, dashArray: '10, 10', opacity: 0.8 }}
            />
         )}
+        
+        {/* Navigation Line */}
+        {!hideLines && navigationTarget && gpsPosition && (
+            <Polyline
+                positions={[
+                    [gpsPosition.lat, gpsPosition.lng],
+                    [navigationTarget.lat, navigationTarget.lng]
+                ]}
+                pathOptions={{
+                    color: '#0ea5e9', // Sky Blue
+                    weight: 4,
+                    dashArray: '10, 10',
+                    opacity: 0.8
+                }}
+            />
+        )}
 
         {/* Markers */}
         {points.map((point, idx) => (
           <React.Fragment key={point.id}>
+            
+            {/* NAVIGATION TARGET VISUAL HIGHLIGHT */}
+            {navigationTarget && navigationTarget.id === point.id && !hideLines && (
+                 <>
+                   {/* Outer Pulsing Ring */}
+                   <div className="leaflet-marker-icon leaflet-zoom-animated leaflet-interactive" 
+                        style={{
+                           left: 0, top: 0, 
+                           transform: `translate3d(0px,0px,0px)`, // Leaflet handles this usually, but React-Leaflet component handles position via lat/lng
+                           zIndex: 100
+                        }}
+                   >
+                       {/* Note: Standard React-Leaflet markers handle positioning. To add a custom pulsing effect at the same coords: */}
+                   </div>
+                   <CircleMarker
+                       center={[point.lat, point.lng]}
+                       radius={20}
+                       pathOptions={{
+                           color: '#0ea5e9',
+                           fillColor: '#0ea5e9',
+                           fillOpacity: 0.2,
+                           weight: 2,
+                           className: 'animate-pulse' // Tailwind animation class support depending on Leaflet version
+                       }}
+                   />
+                 </>
+            )}
+
+            {/* STAKING ERROR INDICATOR */}
+            {/* Visual Arc/Circle for Collinearity Error */}
+            {isStakingMode && !hideLines && point.type === PointType.STAKING && point.collinearityError !== undefined && point.collinearityError > 0.5 && (
+              <CircleMarker
+                center={[point.lat, point.lng]}
+                radius={10 + Math.min(point.collinearityError * 2, 20)} // Scale radius with error
+                pathOptions={{
+                  color: '#ef4444', // Red-500
+                  fillColor: '#ef4444',
+                  fillOpacity: 0.15,
+                  weight: 2,
+                  dashArray: '3, 3'
+                }}
+              >
+                 {!fitBoundsToPoints && (
+                   <Tooltip permanent direction="bottom" offset={[0, 15]} className="bg-transparent border-none shadow-none text-red-500 font-bold text-[10px] drop-shadow-md">
+                      ⚠ {point.collinearityError.toFixed(1)}°
+                   </Tooltip>
+                 )}
+              </CircleMarker>
+            )}
+
             <Marker
               position={[point.lat, point.lng]}
               icon={getIcon(point, idx, fitBoundsToPoints, pointLabelMode)} // fitBoundsToPoints acts as 'isExporting' flag here
@@ -289,25 +415,43 @@ export const MapComponent: React.FC<MapComponentProps> = ({
                       Type: {point.type}<br/>
                       Lat: {point.lat.toFixed(6)}<br/>
                       Lng: {point.lng.toFixed(6)}<br/>
-                      {point.name && <>Name: {point.name}</>}
+                      {point.name && <>Name: {point.name}<br/></>}
+                      {point.collinearityError !== undefined && point.collinearityError > 0 && (
+                        <span className="text-red-600 font-bold">Error: {point.collinearityError.toFixed(2)}°</span>
+                      )}
+                      {point.turnDirection && (
+                        <span className={point.turnDirection === 'Left' ? 'text-purple-600 font-bold' : 'text-green-600 font-bold'}>
+                          Turn: {point.turnDirection} {point.turnAngle ? `(${point.turnAngle}°)` : ''}
+                        </span>
+                      )}
                    </div>
                 </Popup>
               )}
             </Marker>
             
             {/* Staking Lines (Visualizing path from previous) */}
-            {!hideLines && point.distance && point.distance > 0 && idx > 0 && (
+            {!hideLines && point.distance && point.distance > 0 && idx > 0 && 
+              (point.type === PointType.STAKING || points[idx-1].type === PointType.STAKING) && (
                 <Polyline 
                   positions={[
                     [points[idx-1].lat, points[idx-1].lng],
                     [point.lat, point.lng]
                   ]}
                   pathOptions={{ 
-                    color: '#f59e0b', 
-                    weight: 4, 
-                    opacity: 0.6 
+                    color: '#f59e0b', // Amber-500
+                    weight: 5, 
+                    opacity: 0.9,
+                    dashArray: '10, 6', // Distinct dashed look for staking segments
+                    lineCap: 'round'
                   }}
-                />
+                >
+                   {/* Visual Indicator of Calculated Bearing */}
+                   {!fitBoundsToPoints && point.bearing !== undefined && (
+                     <Tooltip permanent direction="center" className="bg-transparent border-none shadow-none text-amber-500 font-bold text-[10px] drop-shadow-md">
+                        {point.bearing.toFixed(0)}°
+                     </Tooltip>
+                   )}
+                </Polyline>
             )}
           </React.Fragment>
         ))}
@@ -349,17 +493,30 @@ export const MapComponent: React.FC<MapComponentProps> = ({
       {/* Compass UI (Overlay) - Hide on export */}
       {!fitBoundsToPoints && (
         <div className="absolute top-4 right-4 z-[400] bg-slate-900/80 backdrop-blur-md border border-slate-700 p-2 rounded-full w-12 h-12 flex items-center justify-center shadow-xl">
-            <div className="relative w-full h-full">
-                 <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-red-500 translate-y-[-12px]">N</div>
-                 <div className="w-1 h-4 bg-red-500 absolute top-1 left-1/2 -translate-x-1/2 rounded-full compass-needle origin-bottom-center" style={{ transform: 'translateX(-50%) rotate(0deg)' }} />
-                 <div className="w-1 h-4 bg-slate-400 absolute bottom-1 left-1/2 -translate-x-1/2 rounded-full compass-needle origin-top-center" style={{ transform: 'translateX(-50%) rotate(0deg)' }} />
+             <div className="relative w-full h-full flex items-center justify-center">
+                {/* Rotating Needle Assembly */}
+                <div 
+                   className="w-full h-full flex flex-col items-center justify-center transition-transform duration-300 ease-out" 
+                   style={{ transform: `rotate(${-heading}deg)` }}
+                >
+                    {/* North Half (Red) */}
+                    <div className="w-1.5 h-3.5 bg-red-500 rounded-t-full relative shadow-sm">
+                        <div className="absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] font-bold text-red-500 select-none">N</div>
+                    </div>
+                    
+                    {/* South Half (Grey) */}
+                    <div className="w-1.5 h-3.5 bg-slate-400 rounded-b-full shadow-sm" />
+                    
+                    {/* Pivot */}
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-slate-800 rounded-full border-2 border-slate-600" />
+                </div>
             </div>
         </div>
       )}
       
       {/* Scale Bar (Mock) */}
       {!fitBoundsToPoints && (
-        <div className="absolute bottom-4 left-4 z-[400] bg-slate-900/80 backdrop-blur px-2 py-1 rounded text-xs font-mono border border-slate-700 shadow-lg">
+        <div className="absolute bottom-4 left-4 z-[400] bg-slate-900/80 backdrop-blur px-2 py-1 rounded text-xs font-mono border border-slate-700 shadow-lg select-none">
            100 m
            <div className="w-full h-1 bg-slate-500 mt-0.5 flex justify-between">
               <div className="w-px h-1.5 bg-slate-300 -mt-0.5"></div>

@@ -27,6 +27,10 @@ export const calculateBearing = (lat1: number, lon1: number, lat2: number, lon2:
   return (θ * 180 / Math.PI + 360) % 360;
 };
 
+export const normalizeAngle = (angle: number): number => {
+  return (angle % 360 + 360) % 360;
+};
+
 export const formatBearing = (bearing: number): string => {
   const directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
   const index = Math.round(bearing / 22.5) % 16;

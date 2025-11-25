@@ -7,7 +7,7 @@ import { ChatAssistant } from './components/ChatAssistant';
 import { GeoPoint, PointType, Survey, StakingState, PointLabelMode } from './types';
 import { 
   calculateArea, calculatePerimeter, formatArea, formatAcres, 
-  calculateDistance, formatBearing, calculateBearing, calculateCollinearity, snapToBaseline, latLngToUtm 
+  calculateDistance, formatBearing, calculateBearing, calculateCollinearity, snapToBaseline, latLngToUtm, normalizeAngle 
 } from './services/geoService';
 import { analyzeSurvey } from './services/geminiService';
 
@@ -34,6 +34,9 @@ const App: React.FC = () => {
   const [mapCenter, setMapCenter] = useState<{lat: number; lng: number; zoom?: number} | null>(null);
   const [activePointId, setActivePointId] = useState<string | null>(null);
   const [fitBoundsForExport, setFitBoundsForExport] = useState(false);
+  
+  // Navigation State
+  const [navigationTargetId, setNavigationTargetId] = useState<string | null>(null);
   
   // Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -190,8 +193,8 @@ const App: React.FC = () => {
         else if (staking.currentBearing !== null) {
             const { error } = calculateCollinearity(last.lat, last.lng, staking.currentBearing, point.lat, point.lng);
             point.collinearityError = error;
-            if (staking.strictCollinearity && error > 0.5) {
-                alert(`Strict Collinearity: Point is ${error.toFixed(1)}° off. Adjust position.`);
+            if (staking.strictCollinearity && error > staking.collinearityTolerance) {
+                alert(`Strict Collinearity: Point is ${error.toFixed(1)}° off (Tolerance: ${staking.collinearityTolerance}°). Adjust position.`);
                 return; // Reject
             }
         }
@@ -224,25 +227,19 @@ const App: React.FC = () => {
   };
 
   const handleLoadSurvey = (survey: Survey) => {
-    // 1. Set the survey (clears existing points from view)
     setCurrentSurvey(survey);
-    
-    // 2. Calculate center of new points
+    setNavigationTargetId(null);
     if (survey.points && survey.points.length > 0) {
         const latSum = survey.points.reduce((sum, p) => sum + p.lat, 0);
         const lngSum = survey.points.reduce((sum, p) => sum + p.lng, 0);
         const centerLat = latSum / survey.points.length;
         const centerLng = lngSum / survey.points.length;
-        
-        // 3. Zoom to location
         setMapCenter({
             lat: centerLat,
             lng: centerLng,
             zoom: survey.points.length === 1 ? 18 : 16
         });
     }
-
-    // 4. Close menu
     setIsMenuOpen(false);
   };
 
@@ -250,8 +247,21 @@ const App: React.FC = () => {
     if (confirm("Clear current points? This cannot be undone.")) {
         const emptySurvey = { ...currentSurvey, points: [], updated: Date.now() };
         setCurrentSurvey(emptySurvey);
-        saveSurvey(emptySurvey); // Persist the empty state immediately
+        saveSurvey(emptySurvey); 
+        setNavigationTargetId(null);
+        setActivePointId(null);
         setIsMenuOpen(false);
+    }
+  };
+  
+  const deletePoint = (id: string) => {
+    if (confirm("Delete this point?")) {
+        const updatedPoints = currentSurvey.points.filter(p => p.id !== id);
+        const updatedSurvey = { ...currentSurvey, points: updatedPoints, updated: Date.now() };
+        setCurrentSurvey(updatedSurvey);
+        saveSurvey(updatedSurvey);
+        setActivePointId(null);
+        if (navigationTargetId === id) setNavigationTargetId(null);
     }
   };
 
@@ -275,8 +285,9 @@ const App: React.FC = () => {
         const rows = currentSurvey.points.map((p, i) => {
             const utm = latLngToUtm(p.lat, p.lng);
             let label = "";
+            const idStr = String(p.id);
             if (p.type === PointType.GPS) label = String.fromCharCode(65 + i);
-            else label = String(p.id).substring(0,2); 
+            else label = String(idStr).substring(0,2); 
             
             return `${label},${p.type},${p.lat.toFixed(8)},${p.lng.toFixed(8)},${p.altitude?.toFixed(2) || ''},${p.accuracy?.toFixed(1)},${utm.zone}${utm.hemi},${utm.easting.toFixed(2)},${utm.northing.toFixed(2)}`;
         }).join('\n');
@@ -307,39 +318,34 @@ const App: React.FC = () => {
         alert("No surveys to export.");
         return;
     }
-
     if (format === 'json') {
         const dataStr = JSON.stringify({ exportDate: new Date(), app: 'AreaVue', surveys: surveys }, null, 2);
         const blob = new Blob([dataStr], { type: 'application/json' });
         downloadFile(blob, `areavue_full_backup_${new Date().toISOString().split('T')[0]}.json`);
         return;
     }
-
     if (format === 'csv') {
         let csvContent = "Survey_Name,ID,Type,Lat,Lng,Elevation_m,Accuracy_m,UTM_Zone,UTM_Easting,UTM_Northing\n";
-        
         surveys.forEach(survey => {
             survey.points.forEach((p, i) => {
                 const utm = latLngToUtm(p.lat, p.lng);
                 let label = "";
+                const idStr = String(p.id);
                 if (p.type === PointType.GPS) label = String.fromCharCode(65 + (i % 26));
-                else label = String(p.id).substring(0,2);
+                else label = String(idStr).substring(0,2);
                 
                 const row = `"${survey.name}",${label},${p.type},${p.lat.toFixed(8)},${p.lng.toFixed(8)},${p.altitude?.toFixed(2) || ''},${p.accuracy?.toFixed(1)},${utm.zone}${utm.hemi},${utm.easting.toFixed(2)},${utm.northing.toFixed(2)}\n`;
                 csvContent += row;
             });
         });
-        
         const blob = new Blob([csvContent], { type: 'text/csv' });
         downloadFile(blob, `areavue_all_surveys_${new Date().toISOString().split('T')[0]}.csv`);
     }
-
     if (format === 'kml') {
         let kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
     <name>AreaVue All Surveys</name>`;
-        
         surveys.forEach(survey => {
             kml += `
     <Folder>
@@ -354,7 +360,6 @@ const App: React.FC = () => {
         </Placemark>
     </Folder>`;
         });
-
         kml += `
   </Document>
 </kml>`;
@@ -366,9 +371,7 @@ const App: React.FC = () => {
   const exportPDF = async () => {
     if (isExporting) return;
     setIsExporting(true);
-    setFitBoundsForExport(true); // Trigger zoom to points in MapComponent
-
-    // WAIT for zoom animation and tile loading (Crucial)
+    setFitBoundsForExport(true); 
     await new Promise(resolve => setTimeout(resolve, 3500));
 
     try {
@@ -382,8 +385,6 @@ const App: React.FC = () => {
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF();
         
-        // -- Capture Map --
-        // We target 'map-container' which wraps the Leaflet map in MapComponent.tsx
         const mapElement = document.getElementById('map-container');
         let mapImgData = null;
         
@@ -392,8 +393,7 @@ const App: React.FC = () => {
                  const canvas = await window.html2canvas(mapElement, { 
                      useCORS: true, 
                      allowTaint: false,
-                     // default scale (1) works best to avoid mobile memory limits/blank canvas
-                     backgroundColor: '#cbd5e1', // Capture background color if map is blank (debug)
+                     backgroundColor: '#cbd5e1', 
                      logging: false
                  });
                  mapImgData = canvas.toDataURL('image/png');
@@ -402,15 +402,11 @@ const App: React.FC = () => {
              }
         }
 
-        // -- Build PDF --
         doc.setFontSize(22);
         doc.text("AreaVue Survey Report", 105, 20, { align: 'center' });
-        
         doc.setFontSize(12);
         doc.text(`Survey Name: ${currentSurvey.name}`, 20, 35);
         doc.text(`Date: ${new Date(currentSurvey.updated).toLocaleString()}`, 20, 42);
-        
-        // Stats
         doc.setFontSize(10);
         doc.text(`Total Area: ${formatArea(area)} / ${formatAcres(area)}`, 20, 52);
         doc.text(`Perimeter: ${perimeter.toFixed(1)} m`, 20, 58);
@@ -418,7 +414,6 @@ const App: React.FC = () => {
         
         let y = 75;
 
-        // Add Map Image
         if (mapImgData) {
             const imgProps = doc.getImageProperties(mapImgData);
             const pdfWidth = doc.internal.pageSize.getWidth() - 40;
@@ -427,7 +422,7 @@ const App: React.FC = () => {
             
             doc.addImage(mapImgData, 'PNG', 20, y, pdfWidth, finalHeight);
             doc.setDrawColor(0, 0, 0);
-            doc.rect(20, y, pdfWidth, finalHeight); // Border
+            doc.rect(20, y, pdfWidth, finalHeight); 
             y += finalHeight + 15;
         } else {
             doc.setTextColor(150, 0, 0);
@@ -436,12 +431,10 @@ const App: React.FC = () => {
             y += 15;
         }
 
-        // Coordinate Table
         doc.setFontSize(14);
         doc.text("Coordinates & Elevation", 20, y);
         y += 8;
 
-        // Header
         doc.setFontSize(8);
         doc.setFillColor(230, 230, 230);
         doc.rect(20, y-4, 170, 6, 'F');
@@ -450,10 +443,11 @@ const App: React.FC = () => {
         doc.text("ID", 22, y);
         doc.text("Lat", 35, y);
         doc.text("Lng", 60, y);
-        doc.text("Elev(m)", 85, y);
-        doc.text("UTM Zone", 105, y);
-        doc.text("UTM Easting", 125, y);
-        doc.text("UTM Northing", 155, y);
+        doc.text("Bearing", 85, y);
+        doc.text("Elev(m)", 110, y);
+        doc.text("UTM Z", 130, y);
+        doc.text("UTM E", 150, y);
+        doc.text("UTM N", 175, y);
         doc.setFont(undefined, 'normal');
         
         y += 6;
@@ -463,22 +457,21 @@ const App: React.FC = () => {
             if (y > 280) { 
                 doc.addPage(); 
                 y = 20; 
-                // Re-add header
                 doc.setFont(undefined, 'bold');
                 doc.text("ID", 22, y);
                 doc.text("Lat", 35, y);
                 doc.text("Lng", 60, y);
-                doc.text("Elev(m)", 85, y);
-                doc.text("UTM Zone", 105, y);
-                doc.text("UTM Easting", 125, y);
-                doc.text("UTM Northing", 155, y);
+                doc.text("Bearing", 85, y);
+                doc.text("Elev(m)", 110, y);
+                doc.text("UTM Z", 130, y);
+                doc.text("UTM E", 150, y);
+                doc.text("UTM N", 175, y);
                 doc.setFont(undefined, 'normal');
                 y += 6;
             }
             
-            // ID Generation for display
             let label = "";
-            const idStr = String(p.id); // Handle numeric legacy IDs
+            const idStr = String(p.id); 
             
             if (p.type === PointType.GPS) label = String.fromCharCode(65 + (fieldIdx++ % 26));
             else if (p.type === PointType.MANUAL) label = "M" + idStr.substring(0, Math.min(2, idStr.length));
@@ -486,13 +479,21 @@ const App: React.FC = () => {
 
             const utm = latLngToUtm(p.lat, p.lng);
 
+            let bearingStr = "-";
+            if (i > 0) {
+                const prev = currentSurvey.points[i-1];
+                const b = calculateBearing(prev.lat, prev.lng, p.lat, p.lng);
+                bearingStr = formatBearing(b);
+            }
+
             doc.text(label, 22, y);
             doc.text(p.lat.toFixed(6), 35, y);
             doc.text(p.lng.toFixed(6), 60, y);
-            doc.text(p.altitude ? p.altitude.toFixed(1) : "-", 85, y);
-            doc.text(`${utm.zone}${utm.hemi}`, 105, y);
-            doc.text(utm.easting.toFixed(1), 125, y);
-            doc.text(utm.northing.toFixed(1), 155, y);
+            doc.text(bearingStr, 85, y);
+            doc.text(p.altitude ? p.altitude.toFixed(1) : "-", 110, y);
+            doc.text(`${utm.zone}${utm.hemi}`, 130, y);
+            doc.text(utm.easting.toFixed(1), 150, y);
+            doc.text(utm.northing.toFixed(1), 175, y);
             
             doc.setDrawColor(220, 220, 220);
             doc.line(20, y+1, 190, y+1);
@@ -527,16 +528,12 @@ const App: React.FC = () => {
                     newSurveys.push(s);
                     lastImported = s;
                     importedCount++;
-                } else {
-                    // Optional: Import copy if duplicate ID? 
-                    // For now, we simply skip duplicates to avoid data corruption
                 }
             };
 
             if (data.surveys && Array.isArray(data.surveys)) {
                 data.surveys.forEach(processSurvey);
             } else if (data.id && data.points) {
-                // Single survey file
                 processSurvey(data);
             }
         } catch (err) {
@@ -555,7 +552,6 @@ const App: React.FC = () => {
         alert("No new surveys imported. Files may be duplicates or invalid.");
     }
 
-    // Reset input
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -580,6 +576,15 @@ const App: React.FC = () => {
   const area = calculateArea(currentSurvey.points);
   const perimeter = calculatePerimeter(currentSurvey.points);
   const activePoint = currentSurvey.points.find(p => p.id === activePointId);
+  const navigationTarget = currentSurvey.points.find(p => p.id === navigationTargetId);
+
+  // --- Navigation Calculation ---
+  let navDistance = 0;
+  let navBearing = 0;
+  if (navigationTarget && gpsPosition) {
+    navDistance = calculateDistance(gpsPosition.lat, gpsPosition.lng, navigationTarget.lat, navigationTarget.lng);
+    navBearing = calculateBearing(gpsPosition.lat, gpsPosition.lng, navigationTarget.lat, navigationTarget.lng);
+  }
 
   // --- Staking Helpers ---
   const toggleStakingMode = () => {
@@ -605,9 +610,24 @@ const App: React.FC = () => {
               }));
           }
       } else {
-          // Reset
           setStaking(prev => ({ ...prev, baselineStartId: pId, baselineEndId: null, baselineBearing: null, baselineDistance: null }));
       }
+  };
+
+  const handleTurn = (direction: 'Left' | 'Right') => {
+      if (staking.currentBearing === null) return;
+      
+      const turnAmount = document.getElementById('turnAngleInput') as HTMLInputElement;
+      const angle = parseFloat(turnAmount?.value || "90");
+      
+      let newBearing = 0;
+      if (direction === 'Left') {
+          newBearing = normalizeAngle(staking.currentBearing - angle);
+      } else {
+          newBearing = normalizeAngle(staking.currentBearing + angle);
+      }
+      
+      setStaking(prev => ({ ...prev, currentBearing: newBearing }));
   };
 
   const zoomToLocation = () => {
@@ -631,9 +651,10 @@ const App: React.FC = () => {
           gpsPosition={gpsPosition}
           centerOnLocation={mapCenter}
           fitBoundsToPoints={fitBoundsForExport}
-          hideUserPosition={isExporting} // Hide GPS dot on export
-          hideLines={isExporting}        // Hide lines on export
-          pointLabelMode={pointLabelMode} // Pass label mode
+          hideUserPosition={isExporting} 
+          hideLines={isExporting}        
+          pointLabelMode={pointLabelMode} 
+          navigationTarget={navigationTarget || null}
           onMapClick={(lat, lng) => { if(manualMode && !staking.isActive) addManualPoint(lat, lng); }}
           onPointClick={(id) => {
               setActivePointId(id);
@@ -658,8 +679,30 @@ const App: React.FC = () => {
                     </div>
                 </div>
             </Card>
+            
+            {/* NAVIGATION HUD */}
+            {navigationTargetId && gpsPosition && (
+                <Card className="!p-3 !rounded-xl bg-blue-900/90 backdrop-blur border-blue-500 shadow-xl shadow-blue-900/30 animate-fade-in flex flex-col gap-1 w-48">
+                    <div className="flex justify-between items-center border-b border-blue-700/50 pb-1 mb-1">
+                        <div className="text-[10px] text-blue-300 uppercase font-bold">Navigating To</div>
+                        <button onClick={() => setNavigationTargetId(null)} className="text-blue-300 hover:text-white"><i className="fas fa-times"/></button>
+                    </div>
+                    <div className="text-sm font-bold text-white truncate mb-1">
+                        {activePoint?.name || `Point ${String(navigationTargetId).substring(0,4)}...`}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <div className="text-center">
+                            <div className="text-[10px] text-blue-400">Dist</div>
+                            <div className="font-mono font-bold text-lg">{navDistance.toFixed(0)}m</div>
+                        </div>
+                        <div className="text-center">
+                            <div className="text-[10px] text-blue-400">Bearing</div>
+                            <div className="font-mono font-bold text-lg text-amber-400">{navBearing.toFixed(0)}°</div>
+                        </div>
+                    </div>
+                </Card>
+            )}
 
-            {/* License Badge */}
             {(license.status === 'trial' || license.status === 'expired') && (
                 <div className={`px-3 py-1 rounded-full text-xs font-bold ${license.status === 'trial' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50' : 'bg-red-500/20 text-red-400 border border-red-500/50'}`}>
                     {license.status === 'trial' ? `🕒 Trial: ${license.trialDaysLeft} days left` : '❌ Trial Expired'}
@@ -692,6 +735,40 @@ const App: React.FC = () => {
           </div>
       )}
 
+      {/* --- SELECTED POINT ACTIONS CARD --- */}
+      {activePointId && !staking.isActive && !isExporting && (
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 pointer-events-auto w-64">
+              <Card className="!p-3 border-blue-500/50 shadow-2xl">
+                  <div className="flex justify-between items-center mb-2">
+                     <span className="font-bold text-sm">Selected Point</span>
+                     <button onClick={() => setActivePointId(null)} className="text-slate-400 hover:text-white"><i className="fas fa-times"/></button>
+                  </div>
+                  <div className="text-xs text-slate-400 mb-3">
+                      ID: {String(activePointId).substring(0,8)}...<br/>
+                      Type: {activePoint?.type}
+                  </div>
+                  <div className="flex gap-2">
+                      <Button 
+                          className="flex-1 !py-1 !text-xs" 
+                          onClick={() => {
+                              setNavigationTargetId(activePointId);
+                              setActivePointId(null); // Close card
+                          }}
+                      >
+                          <i className="fas fa-compass mr-1"/> Navigate
+                      </Button>
+                      <Button 
+                        variant="danger" 
+                        className="flex-1 !py-1 !text-xs" 
+                        onClick={() => deletePoint(activePointId)}
+                      >
+                          <i className="fas fa-trash"/>
+                      </Button>
+                  </div>
+              </Card>
+          </div>
+      )}
+
       {/* --- STAKING PANEL --- */}
       {staking.isActive && !isExporting && (
           <div className="absolute top-20 left-4 z-10 pointer-events-auto animate-fade-in-left">
@@ -712,6 +789,47 @@ const App: React.FC = () => {
                             <div className="font-mono font-bold text-lg">{currentSurvey.points.length > 1 ? `${currentSurvey.points[currentSurvey.points.length-1].distance?.toFixed(1)}m` : '0.0m'}</div>
                         </div>
                     </div>
+                    
+                    {/* Tolerance Control */}
+                     <div className="bg-slate-800 p-2 rounded flex flex-col gap-1">
+                        <label className="text-[10px] text-slate-400 font-bold uppercase">Tolerance (deg)</label>
+                        <div className="flex gap-2 items-center">
+                             <input 
+                               type="number" 
+                               value={staking.collinearityTolerance}
+                               onChange={(e) => setStaking(prev => ({ ...prev, collinearityTolerance: parseFloat(e.target.value) || 0 }))}
+                               className="bg-slate-700 text-white text-sm rounded px-2 py-1 w-full font-mono text-center disabled:opacity-50"
+                               disabled={staking.strictCollinearity}
+                             />
+                             <Button 
+                                className={`!py-1 !px-2 !text-[10px] whitespace-nowrap ${staking.strictCollinearity ? 'bg-amber-600' : 'bg-slate-600'}`}
+                                onClick={() => setStaking(prev => ({ ...prev, strictCollinearity: !prev.strictCollinearity }))}
+                             >
+                                {staking.strictCollinearity ? "Strict" : "Loose"}
+                             </Button>
+                        </div>
+                    </div>
+
+                    {/* Turn Controls */}
+                    <div className="bg-slate-800 p-2 rounded flex flex-col gap-2">
+                        <div className="flex justify-between items-center">
+                            <label className="text-[10px] text-slate-400 font-bold uppercase">Turn Corner</label>
+                            <input 
+                                id="turnAngleInput"
+                                type="number" 
+                                defaultValue="90"
+                                className="bg-slate-700 text-white text-xs rounded px-1 py-0.5 w-12 font-mono text-center"
+                            />
+                        </div>
+                        <div className="flex gap-2">
+                             <Button variant="secondary" className="flex-1 !py-1 !text-xs bg-slate-700 border border-slate-600" onClick={() => handleTurn('Left')}>
+                                 <i className="fas fa-undo mr-1"/> Left
+                             </Button>
+                             <Button variant="secondary" className="flex-1 !py-1 !text-xs bg-slate-700 border border-slate-600" onClick={() => handleTurn('Right')}>
+                                 Right <i className="fas fa-redo ml-1"/>
+                             </Button>
+                        </div>
+                    </div>
 
                     {/* Intermediate Staking Info */}
                     {staking.baselineStartId && (
@@ -730,9 +848,6 @@ const App: React.FC = () => {
                     )}
                     
                     <div className="flex gap-2">
-                        <Button className="flex-1 !py-2 !text-xs" onClick={() => setStaking(prev => ({ ...prev, strictCollinearity: !prev.strictCollinearity }))} variant={staking.strictCollinearity ? "warning" : "secondary"}>
-                           {staking.strictCollinearity ? "Strict" : "Loose"}
-                        </Button>
                         <Button className="flex-1 !py-2 !text-xs" onClick={() => setStaking(prev => ({ ...prev, baselineStartId: null, baselineEndId: null }))}>
                             Clear Base
                         </Button>
@@ -849,19 +964,26 @@ const App: React.FC = () => {
                   </div>
               </div>
 
-              {/* Map Labels Control */}
+              {/* Map Labels Control - Consolidated Dropdown */}
               <div className="mb-6">
-                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Map Labels</h3>
-                  <div className="flex bg-slate-800 p-1 rounded-lg border border-slate-700">
-                      {(['none', 'id', 'type', 'name'] as PointLabelMode[]).map(mode => (
-                          <button
-                             key={mode}
-                             onClick={() => setPointLabelMode(mode)}
-                             className={`flex-1 py-1.5 text-[10px] uppercase font-bold rounded transition-all ${pointLabelMode === mode ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'}`}
-                          >
-                              {mode}
-                          </button>
-                      ))}
+                  <div className="flex justify-between items-center mb-2">
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Point Labels</h3>
+                      <i className="fas fa-tag text-slate-600 text-xs"></i>
+                  </div>
+                  <div className="relative">
+                      <select
+                          value={pointLabelMode}
+                          onChange={(e) => setPointLabelMode(e.target.value as PointLabelMode)}
+                          className="w-full appearance-none bg-slate-800 border border-slate-700 hover:border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 transition-colors cursor-pointer"
+                      >
+                          <option value="none">Hidden</option>
+                          <option value="id">Show ID (e.g., A, B, M1)</option>
+                          <option value="type">Show Type (GPS/Manual)</option>
+                          <option value="name">Show Name</option>
+                      </select>
+                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-400">
+                          <i className="fas fa-chevron-down text-xs"></i>
+                      </div>
                   </div>
               </div>
 
@@ -985,6 +1107,10 @@ const App: React.FC = () => {
                       <div className="bg-slate-800 p-3 rounded border border-slate-700">
                           <h4 className="font-bold text-white mb-1"><i className="fas fa-ruler-combined text-amber-500 mr-2"/>Staking Mode</h4>
                           <p>Plan a field layout. The app calculates distance and bearing between points and helps you stay in a straight line.</p>
+                      </div>
+                      <div className="bg-slate-800 p-3 rounded border border-slate-700">
+                          <h4 className="font-bold text-white mb-1"><i className="fas fa-compass text-blue-400 mr-2"/>Navigation</h4>
+                          <p>Tap any point to select it, then click "Navigate" to see real-time distance and bearing to that point.</p>
                       </div>
                       <div className="bg-slate-800 p-3 rounded border border-slate-700">
                           <h4 className="font-bold text-white mb-1"><i className="fas fa-robot text-purple-500 mr-2"/>AI Assistant</h4>
