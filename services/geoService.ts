@@ -1,3 +1,4 @@
+
 import { GeoPoint } from '../types';
 
 // Declare global proj4
@@ -103,7 +104,7 @@ export const formatAcres = (sqMeters: number): string => {
 export const latLngToUtm = (lat: number, lng: number) => {
   if (typeof proj4 === 'undefined') {
     // Simple mock if proj4 missing
-    return { easting: lng * 111320, northing: lat * 110574, zone: 0 };
+    return { easting: lng * 111320, northing: lat * 110574, zone: 0, hemi: lat >= 0 ? 'N' : 'S' };
   }
 
   const zoneNum = Math.floor((lng + 180) / 6) + 1;
@@ -115,8 +116,12 @@ export const latLngToUtm = (lat: number, lng: number) => {
   // Proj4 usually needs defs. Assuming WGS84 UTM for simplicity.
   const wgs84Code = `+proj=utm +zone=${zoneNum} +datum=WGS84 +units=m +no_defs`;
   
-  const [easting, northing] = proj4('EPSG:4326', wgs84Code, [lng, lat]);
-  return { easting, northing, zone: zoneNum, hemi };
+  try {
+    const [easting, northing] = proj4('EPSG:4326', wgs84Code, [lng, lat]);
+    return { easting, northing, zone: zoneNum, hemi };
+  } catch (e) {
+      return { easting: 0, northing: 0, zone: 0, hemi };
+  }
 };
 
 // Staking Logic

@@ -18,6 +18,7 @@ export interface GeoPoint {
   type: PointType;
   timestamp: number;
   name?: string;
+  label?: string;
   // Staking specific
   bearing?: number; // Bearing from previous point
   distance?: number; // Distance from previous point
