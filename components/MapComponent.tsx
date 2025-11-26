@@ -12,7 +12,6 @@ declare global {
 }
 
 // --- LEAFLET CONFIGURATION ---
-// Ensure 3D transforms are enabled for smooth performance
 if (L && L.Browser) {
     (L.Browser as any).any3d = true;
 }
@@ -316,21 +315,17 @@ export const MapComponent: React.FC<MapComponentProps> = ({
       <MapContainer 
         center={[20, 0]} 
         zoom={2} 
-        maxZoom={22} // Restored high zoom cap
+        maxZoom={22} 
         style={{ height: '100%', width: '100%' }}
         zoomControl={false}
         attributionControl={false}
         preferCanvas={false}
       >
         <TileLayer
-          // Use standard Google Hybrid with subdomains for speed/reliability
           url="https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
           subdomains={['mt0','mt1','mt2','mt3']}
-          
-          // --- STABLE CONFIGURATION ---
-          maxNativeZoom={20} // High resolution imagery
-          maxZoom={22}       // Allow slight digital zoom for precision
-          // REMOVED crossOrigin="anonymous" to fix disappearing tiles
+          maxNativeZoom={20} 
+          maxZoom={22}       
         />
         
         <MapController 
@@ -444,10 +439,13 @@ export const MapComponent: React.FC<MapComponentProps> = ({
                          onClick={(e) => {
                              e.preventDefault();
                              e.stopPropagation();
-                             callbacksRef.current.onPointDelete(point.id);
                          }}
                          onMouseUp={(e) => {
-                             // Fallback event handler for reliability
+                             e.preventDefault();
+                             e.stopPropagation();
+                             callbacksRef.current.onPointDelete(point.id);
+                         }}
+                         onTouchEnd={(e) => {
                              e.preventDefault();
                              e.stopPropagation();
                              callbacksRef.current.onPointDelete(point.id);

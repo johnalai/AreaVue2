@@ -25,7 +25,8 @@ const App: React.FC = () => {
   const [manualMode, setManualMode] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [pointLabelMode, setPointLabelMode] = useState<PointLabelMode>('none');
-  const [isStakingOptionsOpen, setIsStakingOptionsOpen] = useState(true); // Collapsible staking panel state
+  const [isStakingOptionsOpen, setIsStakingOptionsOpen] = useState(true); 
+  const [mapResetKey, setMapResetKey] = useState(0); 
   
   // Map Control
   const [gpsPosition, setGpsPosition] = useState<{lat: number; lng: number; accuracy: number} | null>(null);
@@ -41,7 +42,7 @@ const App: React.FC = () => {
   
   // Features State
   const [gpsAveraging, setGpsAveraging] = useState<{ active: boolean; timeLeft: number; samples: any[] }>({ active: false, timeLeft: 0, samples: [] });
-  const [gpsThreshold, setGpsThreshold] = useState<number>(5); // Default 5 meters
+  const [gpsThreshold, setGpsThreshold] = useState<number>(5);
   
   // Staking State
   const [staking, setStaking] = useState<StakingState>({
@@ -65,7 +66,6 @@ const App: React.FC = () => {
 
   // --- Effects ---
 
-  // 1. Load Data & License
   useEffect(() => {
     const loaded = localStorage.getItem('areavue_surveys');
     if (loaded) {
@@ -74,7 +74,6 @@ const App: React.FC = () => {
         } catch(e) { console.error("Failed to load surveys", e); }
     }
     
-    // Mock License Logic
     const installDate = parseInt(localStorage.getItem('areavue_install_date') || '0');
     if (!installDate) {
         localStorage.setItem('areavue_install_date', Date.now().toString());
@@ -88,7 +87,6 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // 2. GPS Tracking
   useEffect(() => {
     if (!navigator.geolocation) return;
     gpsWatchId.current = navigator.geolocation.watchPosition(
@@ -96,7 +94,6 @@ const App: React.FC = () => {
             const { latitude, longitude, accuracy, altitude } = pos.coords;
             setGpsPosition({ lat: latitude, lng: longitude, accuracy });
             
-            // Handle Averaging
             if (gpsAveraging.active) {
                 setGpsAveraging(prev => ({
                     ...prev,
@@ -110,7 +107,6 @@ const App: React.FC = () => {
     return () => { if(gpsWatchId.current) navigator.geolocation.clearWatch(gpsWatchId.current); };
   }, [gpsAveraging.active]);
 
-  // 3. GPS Averaging Timer
   useEffect(() => {
     if (!gpsAveraging.active) return;
     if (gpsAveraging.timeLeft <= 0) {
@@ -142,7 +138,6 @@ const App: React.FC = () => {
         return;
     }
 
-    // Weighted average based on accuracy (1/accuracy^2)
     let latSum = 0, lngSum = 0, altSum = 0, weightSum = 0;
     samples.forEach(s => {
         const w = 1 / (s.accuracy * s.accuracy || 1);
@@ -154,7 +149,6 @@ const App: React.FC = () => {
 
     const avgAccuracy = samples.reduce((acc, s) => acc + s.accuracy, 0) / samples.length;
     
-    // Check Threshold
     if (avgAccuracy > gpsThreshold) {
         const proceed = confirm(`⚠️ Low GPS Accuracy Warning\n\nAchieved Accuracy: ±${avgAccuracy.toFixed(1)}m\nRequired Threshold: ±${gpsThreshold}m\n\nThe signal quality is below your settings. Do you want to keep this point anyway?`);
         if (!proceed) return;
@@ -168,7 +162,6 @@ const App: React.FC = () => {
         accuracy: avgAccuracy,
         type: staking.isActive ? PointType.STAKING : PointType.GPS,
         timestamp: Date.now(),
-        // Assign Label Immediately
         label: String.fromCharCode(65 + (currentSurvey.points.filter(p => p.type === PointType.GPS).length % 26))
     };
 
@@ -177,10 +170,7 @@ const App: React.FC = () => {
 
   const addManualPoint = (lat: number, lng: number) => {
     if (!manualMode) return;
-    
-    // Count manual points for labeling
     const manualCount = currentSurvey.points.filter(p => p.type === PointType.MANUAL).length;
-    
     const newPoint: GeoPoint = {
         id: uuidv4(),
         lat,
@@ -192,12 +182,10 @@ const App: React.FC = () => {
     addPointToSurvey(newPoint);
   };
 
-  // Use functional updates to ensure latest state is used
   const addPointToSurvey = (point: GeoPoint) => {
     setCurrentSurvey(prev => {
         const updatedPoints = [...prev.points];
         
-        // Staking Logic
         if (staking.isActive && updatedPoints.length > 0) {
             const last = updatedPoints[updatedPoints.length - 1];
             point.distance = calculateDistance(last.lat, last.lng, point.lat, point.lng);
@@ -214,12 +202,11 @@ const App: React.FC = () => {
                 point.collinearityError = error;
                 if (staking.strictCollinearity && error > staking.collinearityTolerance) {
                     alert(`Strict Collinearity: Point is ${error.toFixed(1)}° off. Adjust position.`);
-                    return prev; // No change
+                    return prev;
                 }
             }
         }
 
-        // Intermediate Snapping
         if (staking.baselineStartId && staking.baselineEndId) {
             const start = prev.points.find(p => p.id === staking.baselineStartId);
             const end = prev.points.find(p => p.id === staking.baselineEndId);
@@ -246,7 +233,6 @@ const App: React.FC = () => {
             p.id === id ? { ...p, lat: newLat, lng: newLng } : p
         );
 
-        // Recalculate metrics
         updatedPoints = updatedPoints.map((p, i) => {
             if (i === 0) return { ...p, distance: 0, bearing: 0 };
             const prevPt = updatedPoints[i-1];
@@ -263,14 +249,13 @@ const App: React.FC = () => {
     });
   };
 
-  const deletePoint = (id: string) => {
+  const deletePoint = useCallback((id: string) => {
     if (!confirm("Delete this point?")) return;
 
     setCurrentSurvey(prev => {
-        // FIX: Force string comparison to handle imported legacy numeric IDs
+        // Force String comparison to handle imported numeric IDs
         let updatedPoints = prev.points.filter(p => String(p.id) !== String(id));
         
-        // Recalculate metrics
         updatedPoints = updatedPoints.map((p, i) => {
             if (i === 0) return { ...p, distance: 0, bearing: 0 };
             const prevPt = updatedPoints[i-1];
@@ -287,8 +272,8 @@ const App: React.FC = () => {
     });
     
     setActivePointId(null);
-    if (navigationTargetId === id) setNavigationTargetId(null);
-  };
+    setNavigationTargetId(prev => prev === id ? null : prev);
+  }, []);
 
   const saveSurvey = (survey: Survey) => {
     setSurveys(prevSurveys => {
@@ -300,9 +285,8 @@ const App: React.FC = () => {
   };
 
   const handleLoadSurvey = (survey: Survey) => {
-    // Fix: Ensure IDs are strings to avoid deletion bugs with legacy numeric IDs
     const patchedPoints = survey.points.map((p, i) => {
-        const newPoint = { ...p, id: String(p.id) }; // Enforce string ID
+        const newPoint = { ...p, id: String(p.id) }; 
         if (!newPoint.label) {
              if (newPoint.type === PointType.GPS) newPoint.label = String.fromCharCode(65 + (i % 26));
              else if (newPoint.type === PointType.MANUAL) newPoint.label = `M${String(newPoint.id).substring(0,1)}`;
@@ -315,6 +299,8 @@ const App: React.FC = () => {
     const patchedSurvey = { ...survey, points: patchedPoints };
     setCurrentSurvey(patchedSurvey);
     setNavigationTargetId(null);
+    setMapResetKey(prev => prev + 1); 
+    
     if (patchedSurvey.points && patchedSurvey.points.length > 0) {
         const latSum = patchedSurvey.points.reduce((sum, p) => sum + p.lat, 0);
         const lngSum = patchedSurvey.points.reduce((sum, p) => sum + p.lng, 0);
@@ -331,25 +317,24 @@ const App: React.FC = () => {
 
   const handleClearCurrent = () => {
     if (confirm("Clear all points from the current map? This cannot be undone.")) {
-        // Fix: Empty the current survey's points but keep metadata
-        // This ensures we don't create a detached new survey if we are editing an existing one.
         setCurrentSurvey(prev => {
             const emptiedSurvey = { 
                 ...prev, 
                 points: [], 
                 updated: Date.now() 
             };
-            // Persist the empty state immediately
             saveSurvey(emptiedSurvey);
             return emptiedSurvey;
         });
         
         setNavigationTargetId(null);
         setActivePointId(null);
+        setMapResetKey(prev => prev + 1); 
         setIsMenuOpen(false);
     }
   };
 
+  // ... (Export functions remain similar) ...
   const downloadFile = (blob: Blob, filename: string) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -374,7 +359,6 @@ const App: React.FC = () => {
         const blob = new Blob([header + rows], { type: 'text/csv' });
         downloadFile(blob, `survey_${currentSurvey.name}.csv`);
     } else {
-        // KML logic
         const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
@@ -593,11 +577,9 @@ const App: React.FC = () => {
             const text = await file.text();
             const data = JSON.parse(text);
             const processSurvey = (s: Survey) => {
-                // Always import, append (1), (2) etc if duplicate ID or assume user wants to merge/overwrite
-                // Actually, we should check ID. If ID exists, overwrite it.
                 const existingIdx = newSurveys.findIndex(ex => ex.id === s.id);
                 if (existingIdx !== -1) {
-                    newSurveys[existingIdx] = s; // Overwrite
+                    newSurveys[existingIdx] = s; 
                 } else {
                     newSurveys.push(s);
                 }
@@ -699,8 +681,7 @@ const App: React.FC = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-900 relative overflow-hidden text-slate-100 font-sans">
-      {/* Key prop forces map reset when survey changes significantly (cleared/loaded) */}
-      <div className="absolute inset-0 z-0" key={currentSurvey.id + currentSurvey.updated + currentSurvey.points.length}>
+      <div className="absolute inset-0 z-0" key={`${currentSurvey.id}-${mapResetKey}`}>
           <MapComponent 
             points={currentSurvey.points}
             activePointId={activePointId}
