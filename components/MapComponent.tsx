@@ -1,15 +1,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents, Circle, Tooltip, CircleMarker, ScaleControl } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Polyline, useMap, useMapEvents, Circle, Tooltip, CircleMarker, ScaleControl } from 'react-leaflet';
 import { GeoPoint, PointType, PointLabelMode } from '../types';
-
-// Add this interface augmentation
-declare global {
-  interface Window {
-    triggerPointDelete: (id: string, e: any) => void;
-  }
-}
 
 // --- LEAFLET CONFIGURATION ---
 if (L && L.Browser) {
@@ -67,33 +60,6 @@ const createDivIconHtml = (
         font-size: ${isSmall ? '10px' : '12px'};
       ">${innerText}</span>
     </div>
-    
-    ${!isSmall && pointId ? `
-    <div 
-      onclick="window.triggerPointDelete('${pointId}', event)"
-      style="
-        position: absolute; 
-        top: -5px; 
-        right: -5px; 
-        width: 20px; 
-        height: 20px; 
-        background: white; 
-        border-radius: 50%; 
-        display: none; 
-        align-items: center; 
-        justify-content: center; 
-        cursor: pointer; 
-        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        z-index: 500;
-        border: 1px solid #fee2e2;
-        pointer-events: auto;
-      "
-      class="group-hover:flex hover:bg-red-50 hover:scale-110 transition-transform"
-      title="Delete Point"
-    >
-      <i class="fas fa-trash-alt" style="font-size: 10px; color: #ef4444;"></i>
-    </div>
-    ` : ''}
     
     ${turnDirection ? `
       <div style="
@@ -204,7 +170,12 @@ const MapController = ({
 
   useEffect(() => {
     if (center) {
-      map.flyTo([center.lat, center.lng], center.zoom || 18, { duration: 1.5 });
+      // Prevent jitter if already at location
+      const current = map.getCenter();
+      const dist = Math.sqrt(Math.pow(current.lat - center.lat, 2) + Math.pow(current.lng - center.lng, 2));
+      if (dist > 0.00001) {
+          map.flyTo([center.lat, center.lng], center.zoom || 18, { duration: 1.5 });
+      }
     }
   }, [center, map]);
 
@@ -237,6 +208,9 @@ const MapEvents = ({
   return null;
 };
 
+// CONSTANT STYLE OBJECT - Crucial for preventing re-renders/unmounts
+const MAP_CONTAINER_STYLE = { height: '100%', width: '100%' };
+
 interface MapComponentProps {
   points: GeoPoint[];
   activePointId: string | null;
@@ -249,7 +223,6 @@ interface MapComponentProps {
   hideLines?: boolean;
   onMapClick: (lat: number, lng: number) => void;
   onPointClick: (id: string) => void;
-  onPointDelete: (id: string) => void;
   onPointMove: (id: string, lat: number, lng: number) => void;
   baseline?: { start: GeoPoint, end: GeoPoint } | null;
   pointLabelMode: PointLabelMode;
@@ -268,7 +241,6 @@ export const MapComponent: React.FC<MapComponentProps> = ({
   hideLines = false,
   onMapClick,
   onPointClick,
-  onPointDelete,
   onPointMove,
   baseline,
   pointLabelMode,
@@ -276,18 +248,10 @@ export const MapComponent: React.FC<MapComponentProps> = ({
 }) => {
   const [heading, setHeading] = useState(0);
 
-  const callbacksRef = useRef({ onPointClick, onPointDelete, onPointMove });
+  const callbacksRef = useRef({ onPointClick, onPointMove });
   useEffect(() => {
-    callbacksRef.current = { onPointClick, onPointDelete, onPointMove };
-  }, [onPointClick, onPointDelete, onPointMove]);
-
-  useEffect(() => {
-    window.triggerPointDelete = (id, e) => {
-      if (e && e.stopPropagation) e.stopPropagation();
-      if (e && e.preventDefault) e.preventDefault();
-      callbacksRef.current.onPointDelete(id);
-    };
-  }, []);
+    callbacksRef.current = { onPointClick, onPointMove };
+  }, [onPointClick, onPointMove]);
 
   useEffect(() => {
     const handleOrientation = (e: DeviceOrientationEvent) => {
@@ -316,7 +280,7 @@ export const MapComponent: React.FC<MapComponentProps> = ({
         center={[20, 0]} 
         zoom={2} 
         maxZoom={22} 
-        style={{ height: '100%', width: '100%' }}
+        style={MAP_CONTAINER_STYLE}
         zoomControl={false}
         attributionControl={false}
         preferCanvas={false}
@@ -382,11 +346,27 @@ export const MapComponent: React.FC<MapComponentProps> = ({
 
         {points.map((point, idx) => (
           <React.Fragment key={point.id}>
+            {/* Visual highlight for navigation target */}
             {navigationTarget && navigationTarget.id === point.id && !hideLines && (
                  <>
                    <div className="leaflet-marker-icon leaflet-zoom-animated leaflet-interactive" style={{ left: 0, top: 0, transform: `translate3d(0px,0px,0px)`, zIndex: 100 }}></div>
                    <CircleMarker center={[point.lat, point.lng]} radius={20} pathOptions={{ color: '#0ea5e9', fillColor: '#0ea5e9', fillOpacity: 0.2, weight: 2, className: 'animate-pulse' }} />
                  </>
+            )}
+
+            {/* Visual highlight for user selected point - Replaces Popup */}
+            {activePointId === point.id && !hideLines && (
+                 <CircleMarker 
+                   center={[point.lat, point.lng]} 
+                   radius={22} 
+                   pathOptions={{ 
+                     color: '#ffffff', 
+                     fillColor: 'transparent', 
+                     weight: 2, 
+                     dashArray: '5, 5',
+                     opacity: 0.8
+                   }} 
+                 />
             )}
 
             {isStakingMode && !hideLines && point.type === PointType.STAKING && point.collinearityError !== undefined && point.collinearityError > 0.5 && (
@@ -419,43 +399,7 @@ export const MapComponent: React.FC<MapComponentProps> = ({
                 }
               }}
             >
-              {!fitBoundsToPoints && (
-                <Popup>
-                   <div className="text-slate-800 min-w-[150px]">
-                      <div className="font-bold border-b pb-1 mb-1 border-slate-200">
-                        Point {getPointShortLabel(point, idx)}
-                      </div>
-                      <div className="text-xs space-y-1 mb-2">
-                        <div>Type: <span className="font-semibold">{point.type}</span></div>
-                        <div>Lat: {point.lat.toFixed(6)}</div>
-                        <div>Lng: {point.lng.toFixed(6)}</div>
-                        {point.collinearityError !== undefined && point.collinearityError > 0 && (
-                            <div className="text-red-600 font-bold">Error: {point.collinearityError.toFixed(2)}°</div>
-                        )}
-                      </div>
-                      <button 
-                         type="button"
-                         className="w-full bg-red-100 hover:bg-red-200 text-red-700 font-bold py-1 px-2 rounded text-xs transition-colors border border-red-300 flex items-center justify-center gap-1 pointer-events-auto"
-                         onClick={(e) => {
-                             e.preventDefault();
-                             e.stopPropagation();
-                         }}
-                         onMouseUp={(e) => {
-                             e.preventDefault();
-                             e.stopPropagation();
-                             callbacksRef.current.onPointDelete(point.id);
-                         }}
-                         onTouchEnd={(e) => {
-                             e.preventDefault();
-                             e.stopPropagation();
-                             callbacksRef.current.onPointDelete(point.id);
-                         }}
-                      >
-                         <i className="fas fa-trash-alt"></i> Delete Point
-                      </button>
-                   </div>
-                </Popup>
-              )}
+              {/* Removed Popup to fix delete button issues. Point selection is now handled via UI Card */}
             </Marker>
             
             {!hideLines && point.distance && point.distance > 0 && idx > 0 && 

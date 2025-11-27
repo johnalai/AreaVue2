@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { MapComponent } from './components/MapComponent';
 import { Card, Button, StatBox, Fab, Modal } from './components/UIComponents';
@@ -9,7 +9,6 @@ import {
   calculateArea, calculatePerimeter, formatArea, formatAcres, 
   calculateDistance, formatBearing, calculateBearing, calculateCollinearity, snapToBaseline, latLngToUtm, normalizeAngle 
 } from './services/geoService';
-import { analyzeSurvey } from './services/geminiService';
 
 const App: React.FC = () => {
   // --- State ---
@@ -18,15 +17,21 @@ const App: React.FC = () => {
     id: uuidv4(), name: 'New Survey', points: [], created: Date.now(), updated: Date.now()
   });
   
+  // Ref for Data Integrity - Source of Truth for async/event operations
+  const surveyRef = useRef(currentSurvey);
+  useEffect(() => {
+    surveyRef.current = currentSurvey;
+  }, [currentSurvey]);
+
   // UI State
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showAIAssistant, setShowAIAssistant] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [showClearConfirmation, setShowClearConfirmation] = useState(false); // New state for modal
   const [manualMode, setManualMode] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [pointLabelMode, setPointLabelMode] = useState<PointLabelMode>('none');
   const [isStakingOptionsOpen, setIsStakingOptionsOpen] = useState(true); 
-  const [mapResetKey, setMapResetKey] = useState(0); 
   
   // Map Control
   const [gpsPosition, setGpsPosition] = useState<{lat: number; lng: number; accuracy: number} | null>(null);
@@ -121,6 +126,20 @@ const App: React.FC = () => {
 
   // --- Actions ---
 
+  const saveSurvey = (survey: Survey) => {
+    try {
+        setSurveys(prevSurveys => {
+            const newSurveys = prevSurveys.filter(s => s.id !== survey.id);
+            newSurveys.push(survey);
+            localStorage.setItem('areavue_surveys', JSON.stringify(newSurveys));
+            return newSurveys;
+        });
+    } catch (e) {
+        console.error("Failed to save survey", e);
+        alert("Warning: Failed to save data locally. Check device storage.");
+    }
+  };
+
   const startGPSCollection = () => {
     if (!gpsPosition) {
         alert("Waiting for GPS signal...");
@@ -154,6 +173,8 @@ const App: React.FC = () => {
         if (!proceed) return;
     }
 
+    const currentPoints = surveyRef.current.points;
+
     const newPoint: GeoPoint = {
         id: uuidv4(),
         lat: latSum / weightSum,
@@ -162,7 +183,7 @@ const App: React.FC = () => {
         accuracy: avgAccuracy,
         type: staking.isActive ? PointType.STAKING : PointType.GPS,
         timestamp: Date.now(),
-        label: String.fromCharCode(65 + (currentSurvey.points.filter(p => p.type === PointType.GPS).length % 26))
+        label: String.fromCharCode(65 + (currentPoints.filter(p => p.type === PointType.GPS).length % 26))
     };
 
     addPointToSurvey(newPoint);
@@ -170,7 +191,9 @@ const App: React.FC = () => {
 
   const addManualPoint = (lat: number, lng: number) => {
     if (!manualMode) return;
-    const manualCount = currentSurvey.points.filter(p => p.type === PointType.MANUAL).length;
+    const currentPoints = surveyRef.current.points;
+    const manualCount = currentPoints.filter(p => p.type === PointType.MANUAL).length;
+    
     const newPoint: GeoPoint = {
         id: uuidv4(),
         lat,
@@ -183,105 +206,108 @@ const App: React.FC = () => {
   };
 
   const addPointToSurvey = (point: GeoPoint) => {
-    setCurrentSurvey(prev => {
-        const updatedPoints = [...prev.points];
+    const current = surveyRef.current;
+    const updatedPoints = [...current.points];
+    
+    if (staking.isActive && updatedPoints.length > 0) {
+        const last = updatedPoints[updatedPoints.length - 1];
+        point.distance = calculateDistance(last.lat, last.lng, point.lat, point.lng);
+        point.bearing = calculateBearing(last.lat, last.lng, point.lat, point.lng);
         
-        if (staking.isActive && updatedPoints.length > 0) {
-            const last = updatedPoints[updatedPoints.length - 1];
-            point.distance = calculateDistance(last.lat, last.lng, point.lat, point.lng);
-            point.bearing = calculateBearing(last.lat, last.lng, point.lat, point.lng);
-            
-            const stakingCount = updatedPoints.filter(p => p.type === PointType.STAKING).length;
-            if (!point.label) point.label = `S${stakingCount + 1}`;
+        const stakingCount = updatedPoints.filter(p => p.type === PointType.STAKING).length;
+        if (!point.label) point.label = `S${stakingCount + 1}`;
 
-            if (updatedPoints.length === 1) {
-                setStaking(st => ({ ...st, currentBearing: point.bearing || null }));
-            } 
-            else if (staking.currentBearing !== null) {
-                const { error } = calculateCollinearity(last.lat, last.lng, staking.currentBearing, point.lat, point.lng);
-                point.collinearityError = error;
-                if (staking.strictCollinearity && error > staking.collinearityTolerance) {
-                    alert(`Strict Collinearity: Point is ${error.toFixed(1)}° off. Adjust position.`);
-                    return prev;
-                }
+        if (updatedPoints.length === 1) {
+            setStaking(st => ({ ...st, currentBearing: point.bearing || null }));
+        } 
+        else if (staking.currentBearing !== null) {
+            const { error } = calculateCollinearity(last.lat, last.lng, staking.currentBearing, point.lat, point.lng);
+            point.collinearityError = error;
+            if (staking.strictCollinearity && error > staking.collinearityTolerance) {
+                alert(`Strict Collinearity: Point is ${error.toFixed(1)}° off. Adjust position.`);
+                return;
             }
         }
+    }
 
-        if (staking.baselineStartId && staking.baselineEndId) {
-            const start = prev.points.find(p => p.id === staking.baselineStartId);
-            const end = prev.points.find(p => p.id === staking.baselineEndId);
-            if (start && end) {
-                const snapped = snapToBaseline(start.lat, start.lng, end.lat, end.lng, point.lat, point.lng);
-                point.lat = snapped.lat;
-                point.lng = snapped.lng;
-                point.type = PointType.INTERMEDIATE;
-                point.isSnapped = true;
-                if (!point.label) point.label = `i${updatedPoints.filter(p => p.type === PointType.INTERMEDIATE).length + 1}`;
-            }
+    if (staking.baselineStartId && staking.baselineEndId) {
+        const start = updatedPoints.find(p => p.id === staking.baselineStartId);
+        const end = updatedPoints.find(p => p.id === staking.baselineEndId);
+        if (start && end) {
+            const snapped = snapToBaseline(start.lat, start.lng, end.lat, end.lng, point.lat, point.lng);
+            point.lat = snapped.lat;
+            point.lng = snapped.lng;
+            point.type = PointType.INTERMEDIATE;
+            point.isSnapped = true;
+            if (!point.label) point.label = `i${updatedPoints.filter(p => p.type === PointType.INTERMEDIATE).length + 1}`;
         }
+    }
 
-        updatedPoints.push(point);
-        const updatedSurvey = { ...prev, points: updatedPoints, updated: Date.now() };
-        saveSurvey(updatedSurvey);
-        return updatedSurvey;
-    });
+    updatedPoints.push(point);
+    const updatedSurvey = { ...current, points: updatedPoints, updated: Date.now() };
+    
+    surveyRef.current = updatedSurvey;
+    
+    setCurrentSurvey(updatedSurvey);
+    saveSurvey(updatedSurvey);
   };
 
   const movePoint = (id: string, newLat: number, newLng: number) => {
-    setCurrentSurvey(prev => {
-        let updatedPoints = prev.points.map(p => 
-            p.id === id ? { ...p, lat: newLat, lng: newLng } : p
-        );
+    const current = surveyRef.current;
+    let updatedPoints = current.points.map(p => 
+        p.id === id ? { ...p, lat: newLat, lng: newLng } : p
+    );
 
-        updatedPoints = updatedPoints.map((p, i) => {
-            if (i === 0) return { ...p, distance: 0, bearing: 0 };
-            const prevPt = updatedPoints[i-1];
-            return {
-                ...p,
-                distance: calculateDistance(prevPt.lat, prevPt.lng, p.lat, p.lng),
-                bearing: calculateBearing(prevPt.lat, prevPt.lng, p.lat, p.lng)
-            };
-        });
-
-        const updatedSurvey = { ...prev, points: updatedPoints, updated: Date.now() };
-        saveSurvey(updatedSurvey);
-        return updatedSurvey;
+    updatedPoints = updatedPoints.map((p, i) => {
+        if (i === 0) return { ...p, distance: 0, bearing: 0 };
+        const prevPt = updatedPoints[i-1];
+        return {
+            ...p,
+            distance: calculateDistance(prevPt.lat, prevPt.lng, p.lat, p.lng),
+            bearing: calculateBearing(prevPt.lat, prevPt.lng, p.lat, p.lng)
+        };
     });
+
+    const updatedSurvey = { ...current, points: updatedPoints, updated: Date.now() };
+    surveyRef.current = updatedSurvey;
+    setCurrentSurvey(updatedSurvey);
+    saveSurvey(updatedSurvey);
   };
 
-  const deletePoint = useCallback((id: string) => {
-    if (!confirm("Delete this point?")) return;
-
-    setCurrentSurvey(prev => {
-        // Force String comparison to handle imported numeric IDs
-        let updatedPoints = prev.points.filter(p => String(p.id) !== String(id));
-        
-        updatedPoints = updatedPoints.map((p, i) => {
-            if (i === 0) return { ...p, distance: 0, bearing: 0 };
-            const prevPt = updatedPoints[i-1];
-            return {
-                ...p,
-                distance: calculateDistance(prevPt.lat, prevPt.lng, p.lat, p.lng),
-                bearing: calculateBearing(prevPt.lat, prevPt.lng, p.lat, p.lng)
-            };
-        });
-
-        const updatedSurvey = { ...prev, points: updatedPoints, updated: Date.now() };
-        saveSurvey(updatedSurvey);
-        return updatedSurvey;
+  const deletePoint = (id: string) => {
+    if (!id) return;
+    
+    const currentData = surveyRef.current;
+    
+    const remainingPoints = currentData.points.filter((p) => p.id !== id);
+    
+    if (remainingPoints.length === currentData.points.length) {
+        setActivePointId(null);
+        return;
+    }
+    
+    const recalculatedPoints = remainingPoints.map((p, i) => {
+      if (i === 0) return { ...p, distance: 0, bearing: 0 };
+      const prevPt = remainingPoints[i - 1];
+      return {
+        ...p,
+        distance: calculateDistance(prevPt.lat, prevPt.lng, p.lat, p.lng),
+        bearing: calculateBearing(prevPt.lat, prevPt.lng, p.lat, p.lng),
+      };
     });
+
+    const updatedSurvey = {
+      ...currentData,
+      points: recalculatedPoints,
+      updated: Date.now(),
+    };
+
+    surveyRef.current = updatedSurvey;
+    setCurrentSurvey(updatedSurvey);
+    saveSurvey(updatedSurvey);
     
     setActivePointId(null);
-    setNavigationTargetId(prev => prev === id ? null : prev);
-  }, []);
-
-  const saveSurvey = (survey: Survey) => {
-    setSurveys(prevSurveys => {
-        const newSurveys = prevSurveys.filter(s => s.id !== survey.id);
-        newSurveys.push(survey);
-        localStorage.setItem('areavue_surveys', JSON.stringify(newSurveys));
-        return newSurveys;
-    });
+    if (navigationTargetId === id) setNavigationTargetId(null);
   };
 
   const handleLoadSurvey = (survey: Survey) => {
@@ -299,7 +325,6 @@ const App: React.FC = () => {
     const patchedSurvey = { ...survey, points: patchedPoints };
     setCurrentSurvey(patchedSurvey);
     setNavigationTargetId(null);
-    setMapResetKey(prev => prev + 1); 
     
     if (patchedSurvey.points && patchedSurvey.points.length > 0) {
         const latSum = patchedSurvey.points.reduce((sum, p) => sum + p.lat, 0);
@@ -315,23 +340,36 @@ const App: React.FC = () => {
     setIsMenuOpen(false);
   };
 
-  const handleClearCurrent = () => {
-    if (confirm("Clear all points from the current map? This cannot be undone.")) {
-        setCurrentSurvey(prev => {
-            const emptiedSurvey = { 
-                ...prev, 
-                points: [], 
-                updated: Date.now() 
-            };
-            saveSurvey(emptiedSurvey);
-            return emptiedSurvey;
-        });
+  // Replaced handleClearCurrent with non-blocking Modal flow
+  const performClearMap = () => {
+        const currentData = surveyRef.current;
+        
+        const emptiedSurvey = { 
+            ...currentData, 
+            points: [], 
+            updated: Date.now() 
+        };
+        
+        surveyRef.current = emptiedSurvey;
+        setCurrentSurvey(emptiedSurvey);
+        saveSurvey(emptiedSurvey);
         
         setNavigationTargetId(null);
         setActivePointId(null);
-        setMapResetKey(prev => prev + 1); 
+        
+        setStaking(prev => ({
+            ...prev,
+            currentBearing: null,
+            targetBearing: null,
+            lastPosition: null,
+            baselineStartId: null,
+            baselineEndId: null,
+            baselineBearing: null,
+            baselineDistance: null
+        }));
+        
+        setShowClearConfirmation(false);
         setIsMenuOpen(false);
-    }
   };
 
   // ... (Export functions remain similar) ...
@@ -681,7 +719,7 @@ const App: React.FC = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-900 relative overflow-hidden text-slate-100 font-sans">
-      <div className="absolute inset-0 z-0" key={`${currentSurvey.id}-${mapResetKey}`}>
+      <div className="absolute inset-0 z-0">
           <MapComponent 
             points={currentSurvey.points}
             activePointId={activePointId}
@@ -696,7 +734,6 @@ const App: React.FC = () => {
             navigationTarget={navigationTarget || null}
             onMapClick={(lat, lng) => { if(manualMode && !staking.isActive) addManualPoint(lat, lng); }}
             onPointClick={(id) => { setActivePointId(id); if (staking.isActive) setBaseline(id); }}
-            onPointDelete={deletePoint}
             onPointMove={movePoint}
             baseline={staking.baselineStartId && staking.baselineEndId ? {
                 start: currentSurvey.points.find(p => p.id === staking.baselineStartId)!,
@@ -746,17 +783,62 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {activePointId && !staking.isActive && !isExporting && (
-          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 pointer-events-auto w-64">
-              <Card className="!p-3 border-blue-500/50 shadow-2xl">
-                  <div className="flex justify-between items-center mb-2">
-                     <span className="font-bold text-sm">Selected Point</span>
-                     <button onClick={() => setActivePointId(null)} className="text-slate-400 hover:text-white"><i className="fas fa-times"/></button>
+      {activePointId && activePoint && !isExporting && (
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 pointer-events-auto w-full max-w-sm px-4">
+              <Card className="!p-4 border-blue-500/50 shadow-2xl w-full mx-auto backdrop-blur-xl bg-slate-900/95">
+                  <div className="flex justify-between items-start mb-3">
+                     <div>
+                        <h3 className="font-bold text-lg text-white">{activePoint?.label || "Point"}</h3>
+                        <div className="text-xs text-slate-400 font-mono">{activePoint?.id.slice(0,8)}</div>
+                     </div>
+                     <button onClick={() => setActivePointId(null)} className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors">
+                        <i className="fas fa-times"/>
+                     </button>
                   </div>
-                  <div className="text-xs text-slate-400 mb-3">ID: {String(activePointId).substring(0,8)}...<br/>Type: {activePoint?.type}</div>
-                  <div className="flex gap-2">
-                      <Button className="flex-1 !py-1 !text-xs" onClick={() => { setNavigationTargetId(activePointId); setActivePointId(null); }}><i className="fas fa-compass mr-1"/> Navigate</Button>
-                      <Button variant="danger" className="flex-1 !py-1 !text-xs" onClick={() => deletePoint(activePointId)}><i className="fas fa-trash"/></Button>
+                  
+                  <div className="grid grid-cols-2 gap-3 text-sm mb-4">
+                      <div className="bg-slate-800/50 p-2 rounded border border-slate-700/50">
+                          <div className="text-[10px] text-slate-500 uppercase font-bold">Latitude</div>
+                          <div className="font-mono text-slate-200">{activePoint?.lat.toFixed(7)}</div>
+                      </div>
+                      <div className="bg-slate-800/50 p-2 rounded border border-slate-700/50">
+                          <div className="text-[10px] text-slate-500 uppercase font-bold">Longitude</div>
+                          <div className="font-mono text-slate-200">{activePoint?.lng.toFixed(7)}</div>
+                      </div>
+                      <div className="bg-slate-800/50 p-2 rounded border border-slate-700/50">
+                          <div className="text-[10px] text-slate-500 uppercase font-bold">Type</div>
+                          <div className="text-slate-200 capitalize">{activePoint?.type.toLowerCase()}</div>
+                      </div>
+                       {activePoint?.altitude && (
+                        <div className="bg-slate-800/50 p-2 rounded border border-slate-700/50">
+                            <div className="text-[10px] text-slate-500 uppercase font-bold">Elevation</div>
+                            <div className="font-mono text-slate-200">{activePoint.altitude.toFixed(1)}m</div>
+                        </div>
+                      )}
+                  </div>
+
+                  <div className="flex gap-3">
+                      <Button 
+                        className="flex-1 !py-2 !text-sm" 
+                        onClick={() => { setNavigationTargetId(activePointId); setActivePointId(null); }}
+                      >
+                        <i className="fas fa-location-arrow mr-2"/> Navigate
+                      </Button>
+                      <Button 
+                        variant="danger" 
+                        className="flex-1 !py-2 !text-sm" 
+                        // IMPORTANT: Stop propagation on ALL event types to prevent map pass-through
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        onClick={(e) => { 
+                            e.preventDefault();
+                            e.stopPropagation(); 
+                            deletePoint(activePointId); 
+                        }}
+                      >
+                        <i className="fas fa-trash-alt mr-2"/> Delete
+                      </Button>
                   </div>
               </Card>
           </div>
@@ -921,7 +1003,7 @@ const App: React.FC = () => {
                       <input type="file" accept=".json" multiple className="hidden" ref={fileInputRef} onChange={handleImport} />
                       <Button variant="secondary" className="w-full" onClick={() => fileInputRef.current?.click()}><i className="fas fa-file-import"/> Import Survey(s)</Button>
                   </div>
-                  <Button variant="danger" className="w-full justify-start mt-4" onClick={handleClearCurrent}><i className="fas fa-trash w-5"/> Clear Current Map</Button>
+                  <Button variant="danger" className="w-full justify-start mt-4" onClick={() => setShowClearConfirmation(true)}><i className="fas fa-trash w-5"/> Clear Current Map</Button>
               </div>
               <div className="flex-1">
                   <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">History</h3>
@@ -936,10 +1018,25 @@ const App: React.FC = () => {
                       {surveys.length === 0 && <div className="text-xs text-slate-500 italic">No saved surveys</div>}
                   </div>
               </div>
-              <div className="mt-6 pt-6 border-t border-slate-800"><div className="text-xs text-center text-slate-500">Version 2.3.0 • Pro License</div></div>
+              <div className="mt-6 pt-6 border-t border-slate-800"><div className="text-xs text-center text-slate-500">Version 2.3.1 • Pro License</div></div>
           </div>
       </div>
       {showAIAssistant && <ChatAssistant survey={currentSurvey} onClose={() => setShowAIAssistant(false)} />}
+      
+      {showClearConfirmation && (
+          <Modal title="Clear Map?" onClose={() => setShowClearConfirmation(false)}>
+              <div className="text-center p-4">
+                  <div className="text-amber-500 text-5xl mb-4"><i className="fas fa-exclamation-triangle"></i></div>
+                  <p className="text-slate-300 mb-6 text-base">Are you sure you want to delete all points from the current map?</p>
+                  <p className="text-slate-500 mb-8 text-sm">This action cannot be undone unless you have saved a backup.</p>
+                  <div className="flex gap-4 justify-center">
+                      <Button variant="secondary" onClick={() => setShowClearConfirmation(false)} className="w-32">Cancel</Button>
+                      <Button variant="danger" onClick={performClearMap} className="w-32">Yes, Clear All</Button>
+                  </div>
+              </div>
+          </Modal>
+      )}
+
       {showHelpModal && (
           <Modal title="AreaVue — Comprehensive Help Guide" onClose={() => setShowHelpModal(false)}>
               <div className="space-y-6 text-slate-300 text-sm leading-relaxed">

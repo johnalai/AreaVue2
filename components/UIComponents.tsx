@@ -1,7 +1,8 @@
+
 import React from 'react';
 
 export const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'danger' | 'warning' }> = 
-  ({ children, className, variant = 'primary', ...props }) => {
+  ({ children, className, variant = 'primary', type = 'button', ...props }) => {
   
   const variants = {
     primary: 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-900/20',
@@ -12,6 +13,7 @@ export const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { 
 
   return (
     <button 
+      type={type}
       className={`${variants[variant]} px-4 py-3 rounded-xl font-semibold transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${className}`}
       {...props}
     >
@@ -21,7 +23,7 @@ export const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { 
 };
 
 export const Fab: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { label?: string; isActive?: boolean; colorClass?: string }> = 
-  ({ children, className, label, isActive, colorClass = 'bg-slate-800 border-slate-600', ...props }) => {
+  ({ children, className, label, isActive, colorClass = 'bg-slate-800 border-slate-600', type = 'button', ...props }) => {
   return (
     <div className="flex flex-col items-center gap-1 group relative">
       {label && (
@@ -30,6 +32,7 @@ export const Fab: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { lab
         </div>
       )}
       <button 
+        type={type}
         className={`w-14 h-14 rounded-full shadow-xl border-2 flex items-center justify-center transition-all active:scale-90 ${isActive ? 'ring-4 ring-blue-500/30 scale-110' : ''} ${colorClass} ${className}`}
         {...props}
       >
