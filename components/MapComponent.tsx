@@ -330,16 +330,20 @@ export const MapComponent: React.FC<MapComponentProps> = ({
 
   const validPoints = points.filter(p => !isNaN(p.lat) && !isNaN(p.lng));
 
-  const stakingGuideLine = (stakingGuide && !isNaN(stakingGuide.start.lat) && !isNaN(stakingGuide.start.lng) && !isNaN(stakingGuide.bearing)) ? [
-      [stakingGuide.start.lat, stakingGuide.start.lng],
-      [
-          computeDestinationPoint(stakingGuide.start.lat, stakingGuide.start.lng, stakingGuide.bearing, 500).lat,
-          computeDestinationPoint(stakingGuide.start.lat, stakingGuide.start.lng, stakingGuide.bearing, 500).lng
-      ]
-  ] : null;
+  // Construct staking guide line safely
+  let stakingGuideLine = null;
+  if (stakingGuide && !isNaN(stakingGuide.start.lat) && !isNaN(stakingGuide.start.lng) && stakingGuide.bearing !== null && !isNaN(stakingGuide.bearing)) {
+      const endPt = computeDestinationPoint(stakingGuide.start.lat, stakingGuide.start.lng, stakingGuide.bearing, 500);
+      if (!isNaN(endPt.lat) && !isNaN(endPt.lng)) {
+          stakingGuideLine = [
+              [stakingGuide.start.lat, stakingGuide.start.lng],
+              [endPt.lat, endPt.lng]
+          ];
+      }
+  }
 
   // During export, lock compass to North (0 rotation)
-  const compassRotation = isExporting ? 0 : -heading;
+  const compassRotation = isExporting ? 0 : -(heading || 0); // Safe fallback
   
   // Reposition compass higher when exporting (since top header is hidden)
   const compassPositionClass = isExporting ? 'top-4 left-4' : 'top-24 left-4';
@@ -376,7 +380,7 @@ export const MapComponent: React.FC<MapComponentProps> = ({
         {/* Scale Control - Always visible, showing Metric and Imperial */}
         <ScaleControl position="bottomleft" imperial={true} metric={true} />
 
-        {!hideLines && stakingGuideLine && !isNaN(stakingGuideLine[0][0]) && !isNaN(stakingGuideLine[0][1]) && !isNaN(stakingGuideLine[1][0]) && !isNaN(stakingGuideLine[1][1]) && (
+        {!hideLines && stakingGuideLine && (
             <Polyline
                 positions={stakingGuideLine as any}
                 pathOptions={{ 

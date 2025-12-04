@@ -1,3 +1,4 @@
+
 import React from 'react';
 
 export const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'danger' | 'warning' }> = 
@@ -82,7 +83,7 @@ export const StatBox: React.FC<{ label: string; value: string; icon?: string; co
     <div className="flex flex-col items-start leading-none">
       {/* Improved contrast: text-slate-400 instead of text-slate-500 */}
       <div className="text-[9px] text-slate-400 font-bold uppercase tracking-tight mb-0.5">{label}</div>
-      <div className="text-xs font-bold text-white tracking-wide whitespace-pre-line">{value}</div>
+      <div className="text-xs font-bold text-white tracking-wide whitespace-pre-line">{String(value)}</div>
     </div>
   </div>
 );

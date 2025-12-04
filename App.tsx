@@ -4,6 +4,7 @@ import { MapComponent } from './components/MapComponent';
 import { Button, Fab, Card, Modal, StatBox, Toast } from './components/UIComponents';
 import { StakingControls } from './components/StakingControls';
 import { StyleEditor } from './components/StyleEditor';
+import { ChatAssistant } from './components/ChatAssistant';
 import { Survey, GeoPoint, PointType, StakingState, StyleConfiguration } from './types';
 import { calculateArea, calculatePerimeter, formatArea, formatAcres, calculateDistance, calculateBearing, calculateCrossTrackError, latLngToUtm, formatBearing } from './services/geoService';
 
@@ -37,6 +38,7 @@ const App: React.FC = () => {
   const [isManualMode, setIsManualMode] = useState(false);
   const [showStakingControls, setShowStakingControls] = useState(false);
   const [showStyleEditor, setShowStyleEditor] = useState(false);
+  const [showChat, setShowChat] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [showClearConfirmation, setShowClearConfirmation] = useState(false);
   const [renameValue, setRenameValue] = useState("");
@@ -193,7 +195,7 @@ const App: React.FC = () => {
   };
 
   const handleMapClick = (lat: number, lng: number) => {
-    if (!isManualMode || !currentSurveyId) return;
+    if (!isManualMode || !currentSurveyId || isNaN(lat) || isNaN(lng)) return;
     const newPoint: GeoPoint = {
       id: generateUUID(),
       lat, lng, 
@@ -208,6 +210,9 @@ const App: React.FC = () => {
   const addGpsPoint = () => {
     if (!gpsPosition || !currentSurveyId) return;
     
+    // Safety check for NaN
+    if (isNaN(gpsPosition.lat) || isNaN(gpsPosition.lng)) return;
+
     const newPoint: GeoPoint = {
       id: generateUUID(),
       lat: gpsPosition.lat,
@@ -762,6 +767,8 @@ const App: React.FC = () => {
         safeGpsPosition.lat, safeGpsPosition.lng
      );
      const distToLast = calculateDistance(lastPoint.lat, lastPoint.lng, safeGpsPosition.lat, safeGpsPosition.lng);
+     
+     // Only set stats if calculations returned valid numbers (geoService now guarantees non-NaN return)
      liveStakingStats = {
          crossTrackError: crossTrack.distance,
          direction: crossTrack.direction,
@@ -896,6 +903,9 @@ const App: React.FC = () => {
         <Fab onClick={() => setShowStakingControls(true)} colorClass="bg-amber-600 border-amber-400" label="Staking Menu" isActive={stakingState.isActive}>
            <i className="fas fa-compass text-lg" />
         </Fab>
+        <Fab onClick={() => setShowChat(true)} colorClass="bg-purple-600 border-purple-400" label="AI Assistant">
+           <i className="fas fa-robot text-lg" />
+        </Fab>
       </div>
 
       {/* STAKING CONTROLS */}
@@ -919,6 +929,13 @@ const App: React.FC = () => {
             onUpdate={setStyleConfig}
             onClose={() => setShowStyleEditor(false)}
           />
+        </div>
+      )}
+
+      {/* AI ASSISTANT */}
+      {showChat && currentSurvey && (
+        <div data-hide-on-export="true">
+          <ChatAssistant survey={currentSurvey} onClose={() => setShowChat(false)} />
         </div>
       )}
 
@@ -983,6 +1000,9 @@ const App: React.FC = () => {
 
              <Button variant="secondary" className="w-full justify-start text-xs py-2" onClick={() => { setIsMenuOpen(false); setShowStyleEditor(true); }}>
                 <i className="fas fa-palette w-4"></i> Point Styles
+             </Button>
+             <Button variant="secondary" className="w-full justify-start text-xs py-2" onClick={() => { setIsMenuOpen(false); setShowChat(true); }}>
+                <i className="fas fa-magic w-4"></i> AI Assistant
              </Button>
 
              <Button variant="danger" className="w-full justify-start text-xs py-2" onClick={handleClearAllPoints} title="Permanently delete all points">
