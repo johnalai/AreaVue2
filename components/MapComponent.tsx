@@ -2,7 +2,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { MapContainer, TileLayer, Marker, Polyline, useMap, useMapEvents, Circle, Tooltip, CircleMarker, ScaleControl } from 'react-leaflet';
-import { GeoPoint, PointType, PointLabelMode } from '../types';
+import { GeoPoint, PointType, PointLabelMode, StyleConfiguration, PointStyle } from '../types';
 
 // --- LEAFLET CONFIGURATION ---
 if (L && L.Browser) {
@@ -19,49 +19,50 @@ const DefaultIcon = L.icon({
 });
 L.Marker.prototype.options.icon = DefaultIcon;
 
-// Helper to generate consistent short labels
-const getPointShortLabel = (point: GeoPoint, index: number) => {
-  if (point.label) return point.label;
-  const idStr = String(point.id);
-  if (point.type === PointType.GPS) return String.fromCharCode(65 + (index % 26));
-  if (point.type === PointType.MANUAL) return "M" + idStr.substring(0, Math.min(2, idStr.length));
-  if (point.type === PointType.STAKING) return "S" + idStr.substring(0, Math.min(2, idStr.length));
-  if (point.type === PointType.INTERMEDIATE) return "i";
-  return String(index + 1);
-};
-
 // Custom Icon Generators
 const createDivIconHtml = (
-  color1: string, 
-  color2: string, 
+  style: PointStyle,
   innerText: string, 
   size: number, 
   isSmall: boolean, 
   labelText: string | null,
   turnDirection?: 'Left' | 'Right',
   pointId?: string
-) => `
+) => {
+  // Shape logic
+  let borderRadius = '0%';
+  if (style.shape === 'circle') borderRadius = '50%';
+  else if (style.shape === 'rounded') borderRadius = '20%';
+  else borderRadius = '0%'; // Square
+
+  // Dynamic font sizing based on marker size
+  const fontSize = Math.max(8, size * 0.4);
+  const borderWidth = Math.max(1, size * 0.08); // Approx 2-3px for normal size
+
+  return `
   <div class="relative group">
     <div class="marker-pin transition-transform duration-300" style="
-      background: linear-gradient(135deg, ${color1}, ${color2});
+      background-color: ${style.color};
+      background-image: linear-gradient(135deg, transparent 0%, rgba(0,0,0,0.2) 100%);
       width: ${size}px;
       height: ${size}px;
-      border-radius: 50%;
+      border-radius: ${borderRadius};
       display: flex;
       align-items: center;
       justify-content: center;
-      border: ${isSmall ? '2px' : '3px'} solid white;
+      border: ${borderWidth}px solid white;
       box-shadow: 0 4px 12px rgba(0,0,0,0.4);
     ">
-      <span style="
+      ${innerText ? `<span style="
         color: white; 
         font-weight: 800; 
         font-family: sans-serif; 
-        font-size: ${isSmall ? '10px' : '12px'};
-      ">${innerText}</span>
+        font-size: ${fontSize}px;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+      ">${innerText}</span>` : ''}
     </div>
     
-    ${turnDirection ? `
+    ${turnDirection && !isSmall ? `
       <div style="
         position: absolute;
         top: -6px;
@@ -83,7 +84,7 @@ const createDivIconHtml = (
       </div>
     ` : ''}
 
-    ${labelText ? `
+    ${labelText && !isSmall ? `
       <div style="
         position: absolute;
         top: ${size + 4}px;
@@ -106,17 +107,31 @@ const createDivIconHtml = (
     ` : ''}
   </div>
 `;
+};
 
-const getIcon = (point: GeoPoint, index: number, isExporting: boolean, labelMode: PointLabelMode) => {
-  const size = isExporting ? 24 : 32;
+const getIcon = (
+  point: GeoPoint, 
+  index: number, 
+  isExporting: boolean, 
+  labelMode: PointLabelMode,
+  styleConfig: StyleConfiguration
+) => {
+  // Get style for this point type
+  const style = styleConfig[point.type] || styleConfig[PointType.GPS];
+
+  // Base size: 32px normally, 16px for export
+  const baseSize = isExporting ? 16 : 32;
+  
+  // Apply the user's size multiplier (default to 1 if undefined)
+  const size = baseSize * (style.size || 1);
   
   let innerText = "";
-  if (point.label) {
-     innerText = point.label;
-     if (innerText.length > 2) {
-         if (point.type === PointType.GPS) innerText = innerText.substring(0, 2);
-         else if (point.type === PointType.MANUAL) innerText = "M" + String(point.id).substring(0, 1);
-     }
+  if (point.label && typeof point.label === 'string') {
+      innerText = point.label;
+      if (innerText.length > 2) {
+          if (point.type === PointType.GPS) innerText = innerText.substring(0, 2);
+          else if (point.type === PointType.MANUAL) innerText = "M" + String(point.id).substring(0, 1);
+      }
   } else {
       const idStr = String(point.id);
       if (point.type === PointType.GPS) innerText = String.fromCharCode(65 + (index % 26));
@@ -127,27 +142,13 @@ const getIcon = (point: GeoPoint, index: number, isExporting: boolean, labelMode
   }
 
   let labelText: string | null = null;
-  if (labelMode === 'id') labelText = point.label || String(point.id).substring(0, 8); 
-  else if (labelMode === 'type') labelText = point.type;
-  else if (labelMode === 'name') labelText = point.name || point.label || point.type;
-
-  let html = "";
-  switch (point.type) {
-    case PointType.GPS:
-      html = createDivIconHtml('#3b82f6', '#1d4ed8', innerText, size, isExporting, labelText, undefined, point.id);
-      break;
-    case PointType.MANUAL:
-      html = createDivIconHtml('#ec4899', '#be185d', innerText, size, isExporting, labelText, undefined, point.id);
-      break;
-    case PointType.STAKING:
-      html = createDivIconHtml('#f59e0b', '#b45309', innerText, size, isExporting, labelText, point.turnDirection, point.id);
-      break;
-    case PointType.INTERMEDIATE:
-      html = createDivIconHtml('#06b6d4', '#0e7490', innerText, size * 0.8, isExporting, labelText, undefined, point.id);
-      break;
-    default:
-      html = createDivIconHtml('#64748b', '#334155', innerText, size, isExporting, labelText, undefined, point.id);
+  if (!isExporting) { 
+    if (labelMode === 'id') labelText = (point.label && typeof point.label === 'string') ? point.label : String(point.id).substring(0, 8); 
+    else if (labelMode === 'type') labelText = point.type;
+    else if (labelMode === 'name') labelText = point.name || (typeof point.label === 'string' ? point.label : null) || point.type;
   }
+
+  const html = createDivIconHtml(style, innerText, size, isExporting, labelText, point.turnDirection, point.id);
 
   return L.divIcon({
     className: 'custom-div-icon',
@@ -160,20 +161,38 @@ const getIcon = (point: GeoPoint, index: number, isExporting: boolean, labelMode
 const MapController = ({ 
   center, 
   points, 
-  fitBounds 
+  fitBounds,
+  fitBoundsTrigger,
+  recenterTrigger,
+  isMenuOpen
 }: { 
   center: { lat: number; lng: number; zoom?: number } | null,
   points: GeoPoint[],
-  fitBounds: boolean
+  fitBounds: boolean,
+  fitBoundsTrigger: number,
+  recenterTrigger: number,
+  isMenuOpen?: boolean
 }) => {
   const map = useMap();
 
   useEffect(() => {
-    if (center) {
-      // Prevent jitter if already at location
+    const t = setTimeout(() => {
+        map.invalidateSize();
+    }, 300); 
+    return () => clearTimeout(t);
+  }, [isMenuOpen, map]);
+
+  useEffect(() => {
+    if (recenterTrigger > 0 && center && !isNaN(center.lat) && !isNaN(center.lng)) {
+        map.flyTo([center.lat, center.lng], 18, { duration: 1.0 });
+    }
+  }, [recenterTrigger, center, map]);
+
+  useEffect(() => {
+    if (center && !isNaN(center.lat) && !isNaN(center.lng)) {
       const current = map.getCenter();
       const dist = Math.sqrt(Math.pow(current.lat - center.lat, 2) + Math.pow(current.lng - center.lng, 2));
-      if (dist > 0.00001) {
+      if (!isNaN(dist) && dist > 0.00001) {
           map.flyTo([center.lat, center.lng], center.zoom || 18, { duration: 1.5 });
       }
     }
@@ -181,21 +200,26 @@ const MapController = ({
 
   useEffect(() => {
     if (fitBounds && points.length > 0) {
-      const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng]));
+      const validPoints = points.filter(p => !isNaN(p.lat) && !isNaN(p.lng));
+      if (validPoints.length === 0) return;
+      const bounds = L.latLngBounds(validPoints.map(p => [p.lat, p.lng]));
       map.fitBounds(bounds, { padding: [50, 50], maxZoom: 21, animate: false });
     }
   }, [fitBounds, points, map]);
 
+  useEffect(() => {
+    if (fitBoundsTrigger > 0 && points.length > 0) {
+       const validPoints = points.filter(p => !isNaN(p.lat) && !isNaN(p.lng));
+       if (validPoints.length === 0) return;
+       const bounds = L.latLngBounds(validPoints.map(p => [p.lat, p.lng]));
+       map.fitBounds(bounds, { padding: [50, 50], maxZoom: 21, animate: true, duration: 1.0 });
+    }
+  }, [fitBoundsTrigger, points, map]);
+
   return null;
 };
 
-const MapEvents = ({ 
-  onClick, 
-  isManualMode 
-}: { 
-  onClick: (lat: number, lng: number) => void,
-  isManualMode: boolean 
-}) => {
+const MapEvents = ({ onClick, isManualMode }: { onClick: (lat: number, lng: number) => void, isManualMode: boolean }) => {
   useMapEvents({
     click(e) {
       onClick(e.latlng.lat, e.latlng.lng);
@@ -208,17 +232,35 @@ const MapEvents = ({
   return null;
 };
 
-// CONSTANT STYLE OBJECT - Crucial for preventing re-renders/unmounts
 const MAP_CONTAINER_STYLE = { height: '100%', width: '100%' };
+
+const computeDestinationPoint = (lat: number, lng: number, bearing: number, distanceMeters: number) => {
+    if (isNaN(lat) || isNaN(lng) || isNaN(bearing)) return { lat, lng };
+    const R = 6371e3;
+    const φ1 = (lat * Math.PI) / 180;
+    const λ1 = (lng * Math.PI) / 180;
+    const θ = (bearing * Math.PI) / 180;
+    const δ = distanceMeters / R;
+    const φ2 = Math.asin(Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(θ));
+    const λ2 = λ1 + Math.atan2(Math.sin(θ) * Math.sin(δ) * Math.cos(φ1), Math.cos(δ) - Math.sin(φ1) * Math.sin(φ2));
+    const resLat = (φ2 * 180) / Math.PI;
+    const resLng = (λ2 * 180) / Math.PI;
+    if (isNaN(resLat) || isNaN(resLng)) return { lat, lng };
+    return { lat: resLat, lng: resLng };
+};
 
 interface MapComponentProps {
   points: GeoPoint[];
   activePointId: string | null;
   isStakingMode: boolean;
+  stakingTolerance?: number;
+  showStakingLabels?: boolean;
   isManualMode: boolean;
   gpsPosition: { lat: number; lng: number; accuracy: number } | null;
   centerOnLocation: { lat: number; lng: number; zoom?: number } | null;
   fitBoundsToPoints: boolean;
+  fitBoundsTrigger?: number;
+  recenterTrigger?: number;
   hideUserPosition?: boolean;
   hideLines?: boolean;
   onMapClick: (lat: number, lng: number) => void;
@@ -227,16 +269,24 @@ interface MapComponentProps {
   baseline?: { start: GeoPoint, end: GeoPoint } | null;
   pointLabelMode: PointLabelMode;
   navigationTarget: GeoPoint | null;
+  stakingGuide?: { start: GeoPoint, bearing: number } | null;
+  isExporting?: boolean; 
+  isMenuOpen?: boolean;
+  styleConfig: StyleConfiguration;
 }
 
 export const MapComponent: React.FC<MapComponentProps> = ({
   points,
   activePointId,
   isStakingMode,
+  stakingTolerance = 0.5,
+  showStakingLabels = true,
   isManualMode,
   gpsPosition,
   centerOnLocation,
   fitBoundsToPoints,
+  fitBoundsTrigger = 0,
+  recenterTrigger = 0,
   hideUserPosition = false,
   hideLines = false,
   onMapClick,
@@ -244,11 +294,15 @@ export const MapComponent: React.FC<MapComponentProps> = ({
   onPointMove,
   baseline,
   pointLabelMode,
-  navigationTarget
+  navigationTarget,
+  stakingGuide,
+  isExporting = false,
+  isMenuOpen = false,
+  styleConfig
 }) => {
   const [heading, setHeading] = useState(0);
-
   const callbacksRef = useRef({ onPointClick, onPointMove });
+
   useEffect(() => {
     callbacksRef.current = { onPointClick, onPointMove };
   }, [onPointClick, onPointMove]);
@@ -274,6 +328,22 @@ export const MapComponent: React.FC<MapComponentProps> = ({
     };
   }, []);
 
+  const validPoints = points.filter(p => !isNaN(p.lat) && !isNaN(p.lng));
+
+  const stakingGuideLine = (stakingGuide && !isNaN(stakingGuide.start.lat) && !isNaN(stakingGuide.start.lng) && !isNaN(stakingGuide.bearing)) ? [
+      [stakingGuide.start.lat, stakingGuide.start.lng],
+      [
+          computeDestinationPoint(stakingGuide.start.lat, stakingGuide.start.lng, stakingGuide.bearing, 500).lat,
+          computeDestinationPoint(stakingGuide.start.lat, stakingGuide.start.lng, stakingGuide.bearing, 500).lng
+      ]
+  ] : null;
+
+  // During export, lock compass to North (0 rotation)
+  const compassRotation = isExporting ? 0 : -heading;
+  
+  // Reposition compass higher when exporting (since top header is hidden)
+  const compassPositionClass = isExporting ? 'top-4 left-4' : 'top-24 left-4';
+
   return (
     <div id="map-container" className="h-full w-full relative bg-slate-900">
       <MapContainer 
@@ -294,35 +364,50 @@ export const MapComponent: React.FC<MapComponentProps> = ({
         
         <MapController 
           center={centerOnLocation} 
-          points={points}
+          points={validPoints}
           fitBounds={fitBoundsToPoints}
+          fitBoundsTrigger={fitBoundsTrigger}
+          recenterTrigger={recenterTrigger}
+          isMenuOpen={isMenuOpen}
         />
 
         <MapEvents onClick={onMapClick} isManualMode={isManualMode} />
 
-        {!fitBoundsToPoints && (
-          <ScaleControl position="bottomleft" imperial={false} />
+        {/* Scale Control - Always visible, showing Metric and Imperial */}
+        <ScaleControl position="bottomleft" imperial={true} metric={true} />
+
+        {!hideLines && stakingGuideLine && !isNaN(stakingGuideLine[0][0]) && !isNaN(stakingGuideLine[0][1]) && !isNaN(stakingGuideLine[1][0]) && !isNaN(stakingGuideLine[1][1]) && (
+            <Polyline
+                positions={stakingGuideLine as any}
+                pathOptions={{ 
+                    color: '#f59e0b', 
+                    weight: 2, 
+                    dashArray: '10, 5', 
+                    opacity: 0.8,
+                }}
+            />
         )}
 
-        {!hideLines && points.length > 1 && (
+        {!hideLines && validPoints.length > 1 && (
           <>
             <Polyline 
-              positions={points.map(p => [p.lat, p.lng])}
+              positions={validPoints.map(p => [p.lat, p.lng])}
               pathOptions={{ color: '#3b82f6', weight: 3, opacity: 0.8 }}
             />
-            {points.length > 2 && (
+            {validPoints.length > 2 && (
               <Polyline 
                 positions={[
-                  [points[points.length-1].lat, points[points.length-1].lng],
-                  [points[0].lat, points[0].lng]
+                  [validPoints[validPoints.length-1].lat, validPoints[validPoints.length-1].lng],
+                  [validPoints[0].lat, validPoints[0].lng]
                 ]}
-                pathOptions={{ color: '#3b82f6', weight: 3, dashArray: '5, 10', opacity: 0.5 }}
+                // Solid closing line for clear boundary
+                pathOptions={{ color: '#3b82f6', weight: 3, opacity: 0.8 }} 
               />
             )}
           </>
         )}
 
-        {!hideLines && baseline && (
+        {!hideLines && baseline && !isNaN(baseline.start.lat) && !isNaN(baseline.start.lng) && !isNaN(baseline.end.lat) && !isNaN(baseline.end.lng) && (
            <Polyline 
              positions={[
                [baseline.start.lat, baseline.start.lng],
@@ -332,7 +417,7 @@ export const MapComponent: React.FC<MapComponentProps> = ({
            />
         )}
         
-        {!hideLines && navigationTarget && gpsPosition && (
+        {!hideLines && navigationTarget && gpsPosition && !isNaN(navigationTarget.lat) && !isNaN(navigationTarget.lng) && !isNaN(gpsPosition.lat) && !isNaN(gpsPosition.lng) && (
             <Polyline
                 positions={[
                     [gpsPosition.lat, gpsPosition.lng],
@@ -344,49 +429,28 @@ export const MapComponent: React.FC<MapComponentProps> = ({
             />
         )}
 
-        {points.map((point, idx) => (
+        {validPoints.map((point, idx) => (
           <React.Fragment key={point.id}>
-            {/* Visual highlight for navigation target */}
-            {navigationTarget && navigationTarget.id === point.id && !hideLines && (
-                 <>
-                   <div className="leaflet-marker-icon leaflet-zoom-animated leaflet-interactive" style={{ left: 0, top: 0, transform: `translate3d(0px,0px,0px)`, zIndex: 100 }}></div>
-                   <CircleMarker center={[point.lat, point.lng]} radius={20} pathOptions={{ color: '#0ea5e9', fillColor: '#0ea5e9', fillOpacity: 0.2, weight: 2, className: 'animate-pulse' }} />
-                 </>
-            )}
-
-            {/* Visual highlight for user selected point - Replaces Popup */}
             {activePointId === point.id && !hideLines && (
                  <CircleMarker 
                    center={[point.lat, point.lng]} 
                    radius={22} 
-                   pathOptions={{ 
-                     color: '#ffffff', 
-                     fillColor: 'transparent', 
-                     weight: 2, 
-                     dashArray: '5, 5',
-                     opacity: 0.8
-                   }} 
+                   pathOptions={{ color: '#ffffff', fillColor: 'transparent', weight: 2, dashArray: '5, 5', opacity: 0.8 }} 
                  />
             )}
 
-            {isStakingMode && !hideLines && point.type === PointType.STAKING && point.collinearityError !== undefined && point.collinearityError > 0.5 && (
+            {isStakingMode && !hideLines && point.type === PointType.STAKING && point.collinearityError !== undefined && !isNaN(point.collinearityError) && point.collinearityError > stakingTolerance && (
               <CircleMarker
                 center={[point.lat, point.lng]}
                 radius={10 + Math.min(point.collinearityError * 2, 20)}
                 pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.15, weight: 2, dashArray: '3, 3' }}
-              >
-                 {!fitBoundsToPoints && (
-                   <Tooltip permanent direction="bottom" offset={[0, 15]} className="bg-transparent border-none shadow-none text-red-500 font-bold text-[10px] drop-shadow-md">
-                      ⚠ {point.collinearityError.toFixed(1)}°
-                   </Tooltip>
-                 )}
-              </CircleMarker>
+              />
             )}
 
             <Marker
               position={[point.lat, point.lng]}
-              icon={getIcon(point, idx, fitBoundsToPoints, pointLabelMode)}
-              draggable={!fitBoundsToPoints}
+              icon={getIcon(point, idx, isExporting, pointLabelMode, styleConfig)}
+              draggable={!fitBoundsToPoints && !isExporting}
               eventHandlers={{
                 click: (e) => {
                   L.DomEvent.stopPropagation(e);
@@ -398,56 +462,41 @@ export const MapComponent: React.FC<MapComponentProps> = ({
                   callbacksRef.current.onPointMove(point.id, position.lat, position.lng);
                 }
               }}
-            >
-              {/* Removed Popup to fix delete button issues. Point selection is now handled via UI Card */}
-            </Marker>
-            
-            {!hideLines && point.distance && point.distance > 0 && idx > 0 && 
-              (point.type === PointType.STAKING || points[idx-1].type === PointType.STAKING) && (
-                <Polyline 
-                  positions={[[points[idx-1].lat, points[idx-1].lng], [point.lat, point.lng]]}
-                  pathOptions={{ color: '#f59e0b', weight: 5, opacity: 0.9, dashArray: '10, 6', lineCap: 'round' }}
-                >
-                   {!fitBoundsToPoints && point.bearing !== undefined && (
-                     <Tooltip permanent direction="center" className="bg-transparent border-none shadow-none text-amber-500 font-bold text-[10px] drop-shadow-md">
-                        {point.bearing.toFixed(0)}°
-                     </Tooltip>
-                   )}
-                </Polyline>
-            )}
+            />
           </React.Fragment>
         ))}
 
-        {gpsPosition && !hideUserPosition && (
-          <>
-            <Circle 
-              center={[gpsPosition.lat, gpsPosition.lng]}
-              radius={gpsPosition.accuracy}
-              pathOptions={{ color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.15, weight: 1 }}
-            />
-            <Marker 
-              position={[gpsPosition.lat, gpsPosition.lng]}
-              icon={L.divIcon({
-                className: 'user-location-icon',
-                html: `<div style="width: 16px; height: 16px; background-color: #3b82f6; border: 3px solid white; border-radius: 50%; box-shadow: 0 2px 5px rgba(0,0,0,0.3);"></div>`,
-                iconSize: [16, 16],
-                iconAnchor: [8, 8]
-              })}
-            />
-          </>
+        {gpsPosition && !hideUserPosition && !isNaN(gpsPosition.lat) && !isNaN(gpsPosition.lng) && (
+          <Marker 
+            position={[gpsPosition.lat, gpsPosition.lng]}
+            icon={L.divIcon({
+              className: 'user-location-icon',
+              html: `<div style="width: 16px; height: 16px; background-color: #3b82f6; border: 3px solid white; border-radius: 50%; box-shadow: 0 2px 5px rgba(0,0,0,0.3);"></div>`,
+              iconSize: [16, 16],
+              iconAnchor: [8, 8]
+            })}
+          />
         )}
       </MapContainer>
       
+      {/* Compass / North Arrow - Relocated to Top-Left to avoid overlap, moves to top-4 during export */}
       {!fitBoundsToPoints && (
-        <div className="absolute top-4 right-4 z-[400] bg-slate-900/80 backdrop-blur-md border border-slate-700 p-2 rounded-full w-12 h-12 flex items-center justify-center shadow-xl">
-             <div className="relative w-full h-full flex items-center justify-center">
+        <div className={`absolute ${compassPositionClass} z-[1000] group`}>
+             <div className="relative w-12 h-12 bg-slate-900/90 backdrop-blur-md border-2 border-slate-600 rounded-full shadow-2xl flex items-center justify-center transform transition-transform hover:scale-105">
                 <div 
                    className="w-full h-full flex flex-col items-center justify-center transition-transform duration-300 ease-out" 
-                   style={{ transform: `rotate(${-heading}deg)` }}
+                   style={{ transform: `rotate(${compassRotation}deg)` }}
                 >
-                    <div className="w-1.5 h-3.5 bg-red-500 rounded-t-full relative shadow-sm"><div className="absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] font-bold text-red-500 select-none">N</div></div>
-                    <div className="w-1.5 h-3.5 bg-slate-400 rounded-b-full shadow-sm" />
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-slate-800 rounded-full border-2 border-slate-600" />
+                    {/* North Needle */}
+                    <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[20px] border-b-red-500 relative -top-1"></div>
+                    {/* South Needle */}
+                    <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[20px] border-t-slate-200 relative -bottom-1"></div>
+                    
+                    {/* Center Pin */}
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-slate-900 rounded-full border border-slate-500 z-10"></div>
+                    
+                    {/* N Label */}
+                    <div className="absolute -top-3 text-[10px] font-black text-red-500 select-none drop-shadow-md">N</div>
                 </div>
             </div>
         </div>

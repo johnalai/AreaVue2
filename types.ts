@@ -9,6 +9,16 @@ export enum PointType {
 
 export type PointLabelMode = 'none' | 'id' | 'type' | 'name';
 
+export type MarkerShape = 'circle' | 'square' | 'rounded';
+
+export interface PointStyle {
+  color: string;
+  shape: MarkerShape;
+  size: number;
+}
+
+export type StyleConfiguration = Record<PointType, PointStyle>;
+
 export interface GeoPoint {
   id: string;
   lat: number;
@@ -45,6 +55,7 @@ export interface StakingState {
   targetBearing: number | null;
   strictCollinearity: boolean;
   collinearityTolerance: number;
+  showLabels: boolean; // Toggle for map labels
   lastPosition: { lat: number; lng: number } | null;
   // Intermediate Staking
   baselineStartId: string | null;

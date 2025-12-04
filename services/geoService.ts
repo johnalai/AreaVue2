@@ -12,9 +12,13 @@ export const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2
   const Δφ = ((lat2 - lat1) * Math.PI) / 180;
   const Δλ = ((lon2 - lon1) * Math.PI) / 180;
 
-  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+  let a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
             Math.cos(φ1) * Math.cos(φ2) *
             Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  
+  // Clamp 'a' to [0, 1] range to prevent floating point errors (like 1.0000000002) causing Math.sqrt to return NaN
+  a = Math.max(0, Math.min(1, a));
+
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return R * c;
@@ -140,6 +144,27 @@ export const calculateCollinearity = (
   return {
     error: Math.abs(diff),
     direction: diff > 0 ? 'Right' : 'Left' // If actual is to the right of target
+  };
+};
+
+export const calculateCrossTrackError = (
+  startLat: number, startLng: number,
+  targetBearing: number,
+  currentLat: number, currentLng: number
+): { distance: number; direction: 'Left' | 'Right' } => {
+  const dist = calculateDistance(startLat, startLng, currentLat, currentLng);
+  const bearingToPoint = calculateBearing(startLat, startLng, currentLat, currentLng);
+  
+  let diff = bearingToPoint - targetBearing;
+  while (diff > 180) diff -= 360;
+  while (diff < -180) diff += 360;
+  
+  const diffRad = diff * (Math.PI / 180);
+  const xte = dist * Math.sin(diffRad);
+  
+  return {
+    distance: Math.abs(xte),
+    direction: xte > 0 ? 'Right' : 'Left'
   };
 };
 
