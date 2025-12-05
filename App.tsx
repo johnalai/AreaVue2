@@ -44,6 +44,7 @@ const App: React.FC = () => {
   const [renameValue, setRenameValue] = useState("");
   const [isExporting, setIsExporting] = useState(false);
   const [surveyToDelete, setSurveyToDelete] = useState<string | null>(null);
+  const [warningMsg, setWarningMsg] = useState<string | null>(null);
   
   // Configuration
   const [styleConfig, setStyleConfig] = useState<StyleConfiguration>(DEFAULT_STYLES);
@@ -69,6 +70,8 @@ const App: React.FC = () => {
   // Undo System
   const [deletionHistory, setDeletionHistory] = useState<{ point: GeoPoint, index: number, surveyId: string } | null>(null);
   const [showUndoToast, setShowUndoToast] = useState(false);
+  // Fix: Use ReturnType<typeof setTimeout> instead of NodeJS.Timeout to avoid namespace errors
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Map Control
   const [fitBoundsTrigger, setFitBoundsTrigger] = useState(0);
@@ -194,6 +197,18 @@ const App: React.FC = () => {
     setSurveys(prev => prev.map(s => s.id === currentSurveyId ? { ...s, points: recalculated, updated: Date.now() } : s));
   };
 
+  const handlePointLabelChange = (id: string, newLabel: string) => {
+    if (!currentSurveyId) return;
+    setSurveys(prev => prev.map(s => {
+        if (s.id === currentSurveyId) {
+           // Only update label, no need to recalculate geometry
+           const newPoints = s.points.map(p => p.id === id ? { ...p, label: newLabel } : p);
+           return { ...s, points: newPoints, updated: Date.now() };
+        }
+        return s;
+    }));
+  };
+
   const handleMapClick = (lat: number, lng: number) => {
     if (!isManualMode || !currentSurveyId || isNaN(lat) || isNaN(lng)) return;
     const newPoint: GeoPoint = {
@@ -212,6 +227,20 @@ const App: React.FC = () => {
     
     // Safety check for NaN
     if (isNaN(gpsPosition.lat) || isNaN(gpsPosition.lng)) return;
+
+    // Check minimum distance (5m)
+    if (surveyRef.current && surveyRef.current.points.length > 0) {
+        const lastPt = surveyRef.current.points[surveyRef.current.points.length - 1];
+        // Ensure last point is valid before checking distance
+        if (!isNaN(lastPt.lat) && !isNaN(lastPt.lng)) {
+            const dist = calculateDistance(lastPt.lat, lastPt.lng, gpsPosition.lat, gpsPosition.lng);
+            if (dist < 5.0) {
+                setWarningMsg(`Too close to previous point (${dist.toFixed(1)}m). Move >5m.`);
+                setTimeout(() => setWarningMsg(null), 3000);
+                return;
+            }
+        }
+    }
 
     const newPoint: GeoPoint = {
       id: generateUUID(),
@@ -251,11 +280,11 @@ const App: React.FC = () => {
     setActivePointId(id);
   };
 
-  const handleDeletePoint = () => {
-    if (!activePointId || !currentSurveyId || !surveyRef.current) return;
+  const deletePoint = (pointId: string) => {
+    if (!currentSurveyId || !surveyRef.current) return;
     
     const currentPoints = surveyRef.current.points;
-    const index = currentPoints.findIndex(p => p.id === activePointId);
+    const index = currentPoints.findIndex(p => p.id === pointId);
     if (index === -1) return;
 
     const pointToDelete = currentPoints[index];
@@ -266,11 +295,29 @@ const App: React.FC = () => {
       surveyId: currentSurveyId
     });
     setShowUndoToast(true);
-    setTimeout(() => setShowUndoToast(false), 5000);
+    
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    toastTimeoutRef.current = setTimeout(() => setShowUndoToast(false), 5000);
 
-    const newPoints = currentPoints.filter(p => p.id !== activePointId);
+    const newPoints = currentPoints.filter(p => p.id !== pointId);
     updateCurrentSurveyPoints(newPoints);
-    setActivePointId(null);
+    
+    if (activePointId === pointId) {
+        setActivePointId(null);
+    }
+  };
+
+  const handleDeletePoint = () => {
+    if (activePointId) {
+        deletePoint(activePointId);
+    }
+  };
+
+  const handleDeleteLastPoint = () => {
+    if (!surveyRef.current || surveyRef.current.points.length === 0) return;
+    const points = surveyRef.current.points;
+    const lastPoint = points[points.length - 1];
+    deletePoint(lastPoint.id);
   };
 
   const handleUndoDelete = () => {
@@ -284,6 +331,7 @@ const App: React.FC = () => {
     updateCurrentSurveyPoints(currentPoints);
     setShowUndoToast(false);
     setDeletionHistory(null);
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
   };
 
   const handleClearAllPoints = () => {
@@ -862,6 +910,16 @@ const App: React.FC = () => {
                   </div>
                   <button onClick={() => setActivePointId(null)} className="text-slate-400 hover:text-white"><i className="fas fa-times"></i></button>
               </div>
+              <div className="mb-2">
+                 <label className="text-[10px] text-slate-400 uppercase font-bold">Label</label>
+                 <input
+                    type="text"
+                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-white focus:border-blue-500 outline-none"
+                    placeholder="Enter point label..."
+                    value={activePoint.label || ''}
+                    onChange={(e) => handlePointLabelChange(activePoint.id, e.target.value)}
+                 />
+              </div>
               <div className="grid grid-cols-2 gap-2">
                   <Button variant="danger" className="text-sm py-2" onClick={handleDeletePoint}>
                     <i className="fas fa-trash mr-1"></i> Delete
@@ -982,6 +1040,10 @@ const App: React.FC = () => {
              <Button variant="secondary" className="w-full justify-start text-xs py-2" onClick={() => { setRenameValue(currentSurvey?.name || ""); setShowRenameModal(true); }}>
                 <i className="fas fa-edit w-4"></i> Rename Survey
              </Button>
+
+             <Button variant="secondary" className="w-full justify-start text-xs py-2" onClick={handleDeleteLastPoint} disabled={!currentSurvey || currentSurvey.points.length === 0} title="Delete the last added point">
+                <i className="fas fa-undo w-4"></i> Undo Last Point
+             </Button>
              
              <div className="grid grid-cols-2 gap-2">
                 <Button variant="secondary" className="justify-start text-[10px] py-2 px-2" onClick={() => exportSurvey('csv')} title="Export as CSV">
@@ -1093,6 +1155,19 @@ const App: React.FC = () => {
               </div>
            </div>
         </Modal>
+      )}
+
+      {/* WARNING TOAST */}
+      {warningMsg && (
+        <div className="fixed bottom-40 left-1/2 -translate-x-1/2 z-[2000] bg-amber-900/95 backdrop-blur border border-amber-600 text-amber-100 px-5 py-3 rounded-xl shadow-2xl flex items-center gap-4 animate-fade-in-up">
+            <div className="flex items-center gap-2">
+            <i className="fas fa-exclamation-triangle text-amber-400"></i>
+            <span className="text-sm font-medium">{warningMsg}</span>
+            </div>
+            <button onClick={() => setWarningMsg(null)} className="text-amber-400 hover:text-white ml-2">
+            <i className="fas fa-times"/>
+            </button>
+        </div>
       )}
 
       {/* UNDO TOAST */}
