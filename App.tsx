@@ -4,9 +4,8 @@ import { MapComponent } from './components/MapComponent';
 import { Button, Fab, Card, Modal, StatBox, Toast } from './components/UIComponents';
 import { StakingControls } from './components/StakingControls';
 import { StyleEditor } from './components/StyleEditor';
-import { ChatAssistant } from './components/ChatAssistant';
 import { Survey, GeoPoint, PointType, StakingState, StyleConfiguration } from './types';
-import { calculateArea, calculatePerimeter, formatArea, formatAcres, calculateDistance, calculateBearing, calculateCrossTrackError, latLngToUtm, formatBearing } from './services/geoService';
+import { calculateArea, calculatePerimeter, formatArea, formatAcres, calculateDistance, calculateBearing, calculateCrossTrackError, latLngToUtm, formatBearing, searchLocation } from './services/geoService';
 
 // --- UTILS ---
 const generateUUID = () => {
@@ -32,13 +31,19 @@ const App: React.FC = () => {
   const [activePointId, setActivePointId] = useState<string | null>(null);
   
   const [gpsPosition, setGpsPosition] = useState<{ lat: number; lng: number; accuracy: number; alt: number } | null>(null);
+  const [manualCenter, setManualCenter] = useState<{lat: number; lng: number} | null>(null);
   
   // UI Flags
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isManualMode, setIsManualMode] = useState(false);
   const [showStakingControls, setShowStakingControls] = useState(false);
   const [showStyleEditor, setShowStyleEditor] = useState(false);
-  const [showChat, setShowChat] = useState(false);
+  
+  // Search State
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [showClearConfirmation, setShowClearConfirmation] = useState(false);
   const [renameValue, setRenameValue] = useState("");
@@ -390,6 +395,7 @@ const App: React.FC = () => {
   };
 
   const handleRecenter = () => {
+      setManualCenter(null); // Clear manual override to follow GPS
       if (gpsPosition) {
           setRecenterTrigger(Date.now());
       } else {
@@ -407,6 +413,20 @@ const App: React.FC = () => {
      if (!currentSurveyId) return;
      setSurveys(prev => prev.map(s => s.id === currentSurveyId ? { ...s, name: renameValue } : s));
      setShowRenameModal(false);
+  };
+
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return;
+    setIsSearching(true);
+    const result = await searchLocation(searchQuery);
+    setIsSearching(false);
+    
+    if (result) {
+        setManualCenter(result);
+        setShowSearch(false);
+    } else {
+        alert("Location not found. Try 'Lat, Long' or a specific place name.");
+    }
   };
 
   const downloadFile = (content: string, filename: string, type: string) => {
@@ -853,7 +873,7 @@ const App: React.FC = () => {
           showStakingLabels={stakingState.showLabels}
           isManualMode={isManualMode}
           gpsPosition={safeGpsPosition}
-          centerOnLocation={safeGpsPosition}
+          centerOnLocation={manualCenter || safeGpsPosition}
           fitBoundsToPoints={false}
           fitBoundsTrigger={fitBoundsTrigger}
           recenterTrigger={recenterTrigger}
@@ -961,8 +981,8 @@ const App: React.FC = () => {
         <Fab onClick={() => setShowStakingControls(true)} colorClass="bg-amber-600 border-amber-400" label="Staking Menu" isActive={stakingState.isActive}>
            <i className="fas fa-compass text-lg" />
         </Fab>
-        <Fab onClick={() => setShowChat(true)} colorClass="bg-purple-600 border-purple-400" label="AI Assistant">
-           <i className="fas fa-robot text-lg" />
+        <Fab onClick={() => setShowSearch(true)} colorClass="bg-teal-600 border-teal-400" label="Search Location">
+           <i className="fas fa-search text-lg" />
         </Fab>
       </div>
 
@@ -990,10 +1010,31 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* AI ASSISTANT */}
-      {showChat && currentSurvey && (
+      {/* SEARCH MODAL */}
+      {showSearch && (
         <div data-hide-on-export="true">
-          <ChatAssistant survey={currentSurvey} onClose={() => setShowChat(false)} />
+          <Card title="Search Location" onClose={() => setShowSearch(false)} className="w-full max-w-sm absolute top-20 right-4 z-[1000]">
+            <div className="space-y-4">
+               <p className="text-slate-300 text-xs">Enter a place name or "Lat, Long" to jump to a specific location.</p>
+               <input 
+                  type="text"
+                  placeholder="e.g. New York, or 40.7128, -74.0060"
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm focus:border-teal-500 outline-none"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+               />
+               <Button onClick={handleSearch} disabled={isSearching || !searchQuery.trim()} className="w-full bg-teal-600 hover:bg-teal-700">
+                  {isSearching ? <i className="fas fa-spinner fa-spin mr-2" /> : <i className="fas fa-search mr-2" />}
+                  {isSearching ? "Searching..." : "Go to Location"}
+               </Button>
+               {manualCenter && (
+                 <Button variant="secondary" onClick={() => { setManualCenter(null); setShowSearch(false); }} className="w-full">
+                    <i className="fas fa-crosshairs mr-2"></i> Reset to My GPS
+                 </Button>
+               )}
+            </div>
+          </Card>
         </div>
       )}
 
@@ -1062,9 +1103,6 @@ const App: React.FC = () => {
 
              <Button variant="secondary" className="w-full justify-start text-xs py-2" onClick={() => { setIsMenuOpen(false); setShowStyleEditor(true); }}>
                 <i className="fas fa-palette w-4"></i> Point Styles
-             </Button>
-             <Button variant="secondary" className="w-full justify-start text-xs py-2" onClick={() => { setIsMenuOpen(false); setShowChat(true); }}>
-                <i className="fas fa-magic w-4"></i> AI Assistant
              </Button>
 
              <Button variant="danger" className="w-full justify-start text-xs py-2" onClick={handleClearAllPoints} title="Permanently delete all points">

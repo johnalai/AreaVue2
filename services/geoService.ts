@@ -213,3 +213,36 @@ export const snapToBaseline = (
     lng: startLng + clampedT * dLng
   };
 };
+
+// Search Location
+export const searchLocation = async (query: string): Promise<{ lat: number; lng: number; displayName?: string } | null> => {
+    // 1. Try Lat/Lng parse
+    const latLngMatch = query.match(/^(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)$/);
+    if (latLngMatch) {
+        const lat = parseFloat(latLngMatch[1]);
+        const lng = parseFloat(latLngMatch[3]);
+        if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+            return { lat, lng, displayName: `${lat}, ${lng}` };
+        }
+    }
+
+    // 2. Nominatim Search
+    try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`, {
+            headers: {
+                'User-Agent': 'AreaVuePro/1.0'
+            }
+        });
+        const data = await response.json();
+        if (data && data.length > 0) {
+            return {
+                lat: parseFloat(data[0].lat),
+                lng: parseFloat(data[0].lon),
+                displayName: data[0].display_name
+            };
+        }
+    } catch (e) {
+        console.error("Search failed", e);
+    }
+    return null;
+};
